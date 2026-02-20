@@ -143,20 +143,27 @@ export const VisionFeed: React.FC = () => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     
+    // Convert click coordinates to canvas internal resolution
     const x = (e.clientX - rect.left) * (canvas.width / rect.width);
     const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-    const clickedObj = predictionsRef.current.find(prediction => {
+    // Find all objects containing the click point
+    const candidates = predictionsRef.current.filter(prediction => {
       const [bboxX, bboxY, width, height] = prediction.bbox;
       return x >= bboxX && x <= bboxX + width && y >= bboxY && y <= bboxY + height;
     });
 
-    if (clickedObj) {
-      selectedObjectRef.current = clickedObj;
+    if (candidates.length > 0) {
+      // Pick the smallest box if multiple overlap (most precise target)
+      const clickedObj = candidates.sort((a, b) => (a.bbox[2] * a.bbox[3]) - (b.bbox[2] * b.bbox[3]))[0];
+      
+      // Update ref immediately to reset tracking logic to the new object
+      selectedObjectRef.current = { ...clickedObj };
       setSelectedLabel(clickedObj.class);
+      
       toast({
-        title: `Selected: ${clickedObj.class}`,
-        description: `Focusing on this object.`,
+        title: `Focus Locked: ${clickedObj.class}`,
+        description: `Tracking target with ${Math.round(clickedObj.score * 100)}% confidence.`,
       });
     } else {
       selectedObjectRef.current = null;
@@ -193,7 +200,6 @@ export const VisionFeed: React.FC = () => {
       if (frameCountRef.current % 10 === 0 && model && !isDetectingRef.current) {
         isDetectingRef.current = true;
         
-        // Non-blocking detection
         model.detect(video).then(predictions => {
           predictionsRef.current = predictions;
           
@@ -213,13 +219,13 @@ export const VisionFeed: React.FC = () => {
               }
             }
 
-            // Update ref if overlap is significant
+            // Update focus if match is found, or clear if object is completely lost
             if (maxIoU > 0.4 && bestMatch) {
               selectedObjectRef.current = bestMatch;
-            } else if (maxIoU < 0.2) {
-              // Lost tracking - clear selection if too far off
-              // selectedObjectRef.current = null;
-              // setSelectedLabel(null);
+            } else if (maxIoU < 0.1) {
+              // Only clear automatically if it's truly gone to avoid flicker
+              selectedObjectRef.current = null;
+              setSelectedLabel(null);
             }
           }
           
@@ -256,9 +262,10 @@ export const VisionFeed: React.FC = () => {
         const [x, y, width, height] = prediction.bbox;
         const score = Math.round(prediction.score * 100);
         
+        // Check if this box is the current selected object
         const isSelected = activeSelection && 
           prediction.class === activeSelection.class && 
-          calculateIoU(prediction.bbox, activeSelection.bbox) > 0.7;
+          calculateIoU(prediction.bbox, activeSelection.bbox) > 0.8;
 
         const primaryColor = isSelected ? '#22c55e' : 'rgba(239, 68, 68, 0.4)';
         const labelBg = isSelected ? 'rgba(21, 128, 61, 0.9)' : 'rgba(185, 28, 28, 0.5)';
