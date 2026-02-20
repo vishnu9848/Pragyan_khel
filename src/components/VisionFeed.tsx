@@ -2,10 +2,11 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, CameraOff, Sparkles, RefreshCw } from 'lucide-react';
+import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 
 export const VisionFeed: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -13,10 +14,12 @@ export const VisionFeed: React.FC = () => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
   const { toast } = useToast();
 
   const startCamera = async () => {
     setIsLoading(true);
+    setHasCameraPermission(null);
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: { 
@@ -28,15 +31,17 @@ export const VisionFeed: React.FC = () => {
       });
       
       setStream(mediaStream);
+      setHasCameraPermission(true);
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
       }
       setIsStreaming(true);
     } catch (err) {
       console.error("Error accessing camera:", err);
+      setHasCameraPermission(false);
       toast({
         title: "Camera Access Failed",
-        description: "Please ensure you have granted camera permissions.",
+        description: "Please enable camera permissions in your browser settings to use this feature.",
         variant: "destructive",
       });
     } finally {
@@ -62,7 +67,16 @@ export const VisionFeed: React.FC = () => {
     }
   }, [stream]);
 
-  // Effect to handle canvas resizing and basic animation overlay
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [stream]);
+
+  // Effect to handle canvas resizing and real-time visualization overlay
   useEffect(() => {
     let animationFrameId: number;
 
@@ -72,58 +86,63 @@ export const VisionFeed: React.FC = () => {
       const canvas = canvasRef.current;
       const video = videoRef.current;
       const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+      
+      // Check if video metadata is loaded to get actual resolution
+      if (!ctx || video.videoWidth === 0) {
+        animationFrameId = requestAnimationFrame(render);
+        return;
+      }
 
-      // Sync canvas dimensions with video display size
-      if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
-        canvas.width = video.clientWidth;
-        canvas.height = video.clientHeight;
+      // Match canvas size to actual video resolution for precision
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
       }
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Add a subtle sophisticated overlay effect
+      // Add visualization overlay relative to resolution
       const time = Date.now() * 0.001;
-      ctx.strokeStyle = 'rgba(208, 188, 255, 0.4)'; // Soft Lavender
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(208, 188, 255, 0.6)'; // Soft Lavender
+      ctx.lineWidth = Math.max(2, canvas.width * 0.005);
       
-      // Draw some dynamic corners to simulate a scanner/vision UI
-      const size = 30;
-      const margin = 20;
+      const cornerSize = canvas.width * 0.08;
+      const margin = canvas.width * 0.04;
       
+      // Draw tracking corners
       // Top Left
       ctx.beginPath();
-      ctx.moveTo(margin, margin + size);
+      ctx.moveTo(margin, margin + cornerSize);
       ctx.lineTo(margin, margin);
-      ctx.lineTo(margin + size, margin);
+      ctx.lineTo(margin + cornerSize, margin);
       ctx.stroke();
 
       // Top Right
       ctx.beginPath();
-      ctx.moveTo(canvas.width - margin - size, margin);
+      ctx.moveTo(canvas.width - margin - cornerSize, margin);
       ctx.lineTo(canvas.width - margin, margin);
-      ctx.lineTo(canvas.width - margin, margin + size);
+      ctx.lineTo(canvas.width - margin, margin + cornerSize);
       ctx.stroke();
 
       // Bottom Right
       ctx.beginPath();
-      ctx.moveTo(canvas.width - margin, canvas.height - margin - size);
+      ctx.moveTo(canvas.width - margin, canvas.height - margin - cornerSize);
       ctx.lineTo(canvas.width - margin, canvas.height - margin);
-      ctx.lineTo(canvas.width - margin - size, canvas.height - margin);
+      ctx.lineTo(canvas.width - margin - cornerSize, canvas.height - margin);
       ctx.stroke();
 
       // Bottom Left
       ctx.beginPath();
-      ctx.moveTo(margin + size, canvas.height - margin);
+      ctx.moveTo(margin + cornerSize, canvas.height - margin);
       ctx.lineTo(margin, canvas.height - margin);
-      ctx.lineTo(margin, canvas.height - margin - size);
+      ctx.lineTo(margin, canvas.height - margin - cornerSize);
       ctx.stroke();
 
-      // Center crosshair with a pulse
-      const pulse = Math.sin(time * 3) * 5;
+      // Pulsing central crosshair
+      const pulse = Math.sin(time * 5) * 12;
       ctx.beginPath();
-      ctx.arc(canvas.width / 2, canvas.height / 2, 5 + pulse, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(103, 80, 164, 0.5)'; // Deep Purple
+      ctx.arc(canvas.width / 2, canvas.height / 2, (canvas.width * 0.02) + pulse, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(103, 80, 164, 0.35)'; // Deep Purple
       ctx.fill();
 
       animationFrameId = requestAnimationFrame(render);
@@ -141,37 +160,29 @@ export const VisionFeed: React.FC = () => {
   return (
     <div className="w-full max-w-4xl mx-auto p-4 md:p-8 space-y-8 animate-fade-in">
       <Card className="overflow-hidden shadow-2xl border-none bg-white/80 backdrop-blur-sm">
-        <CardHeader className="text-center pb-2">
+        <CardHeader className="text-center pb-4">
           <CardTitle className="text-4xl font-headline font-bold text-primary flex items-center justify-center gap-3">
             <Sparkles className="w-8 h-8" />
-            Vision Canvas
+            Vision Stream
           </CardTitle>
           <CardDescription className="text-lg">
-            Real-time visual intelligence and canvas interaction.
+            Real-time visual processing with resolution-matched canvas overlays.
           </CardDescription>
         </CardHeader>
         
-        <CardContent className="p-0 relative group">
+        <CardContent className="p-0 relative">
           <div className={cn(
-            "relative aspect-video bg-muted flex items-center justify-center overflow-hidden transition-all duration-500",
+            "relative aspect-video bg-muted flex flex-col items-center justify-center overflow-hidden transition-all duration-500",
             !isStreaming && "bg-slate-100"
           )}>
-            {!isStreaming && (
-              <div className="flex flex-col items-center gap-4 text-muted-foreground animate-scale-in">
-                <div className="p-8 rounded-full bg-secondary/50">
-                  <Camera className="w-16 h-16 text-primary" />
-                </div>
-                <p className="font-medium">Camera feed is currently offline</p>
-              </div>
-            )}
-            
+            {/* Standard video tag always present to ensure stable MediaStream binding */}
             <video
               ref={videoRef}
               autoPlay
               playsInline
               muted
               className={cn(
-                "w-full h-full object-cover transition-opacity duration-700",
+                "w-full h-full object-cover transition-opacity duration-700 absolute inset-0",
                 isStreaming ? "opacity-100" : "opacity-0"
               )}
             />
@@ -179,20 +190,41 @@ export const VisionFeed: React.FC = () => {
             <canvas
               ref={canvasRef}
               className={cn(
-                "absolute inset-0 pointer-events-none transition-opacity duration-700",
+                "absolute inset-0 pointer-events-none transition-opacity duration-700 w-full h-full object-contain",
                 isStreaming ? "opacity-100" : "opacity-0"
               )}
             />
 
+            {!isStreaming && !isLoading && (
+              <div className="z-10 flex flex-col items-center gap-4 text-muted-foreground animate-scale-in">
+                <div className="p-8 rounded-full bg-secondary/50">
+                  <Camera className="w-16 h-16 text-primary" />
+                </div>
+                <p className="font-medium">Stream is currently offline</p>
+              </div>
+            )}
+
             {isLoading && (
-              <div className="absolute inset-0 bg-white/40 flex items-center justify-center backdrop-blur-[2px]">
+              <div className="absolute inset-0 bg-white/40 z-20 flex items-center justify-center backdrop-blur-[2px]">
                 <RefreshCw className="w-12 h-12 text-primary animate-spin" />
               </div>
             )}
           </div>
+
+          {hasCameraPermission === false && (
+            <div className="px-6 py-4">
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Access Required</AlertTitle>
+                <AlertDescription>
+                  Camera access was denied. Please check your browser's site permissions and try again.
+                </AlertDescription>
+              </Alert>
+            </div>
+          )}
         </CardContent>
 
-        <CardFooter className="flex flex-col sm:flex-row gap-4 p-8 justify-center bg-secondary/10">
+        <CardFooter className="flex flex-col sm:flex-row gap-4 p-8 justify-center bg-secondary/10 border-t border-secondary/20">
           {!isStreaming ? (
             <Button 
               size="lg" 
@@ -201,9 +233,9 @@ export const VisionFeed: React.FC = () => {
               className="px-10 h-14 rounded-full text-lg font-semibold transition-all hover:scale-105 active:scale-95 shadow-lg shadow-primary/20"
             >
               {isLoading ? (
-                <><RefreshCw className="mr-2 h-5 w-5 animate-spin" /> Starting...</>
+                <><RefreshCw className="mr-2 h-5 w-5 animate-spin" /> Initializing...</>
               ) : (
-                <><Camera className="mr-2 h-5 w-5" /> Start Camera</>
+                <><Camera className="mr-2 h-5 w-5" /> Start Live Stream</>
               )}
             </Button>
           ) : (
@@ -222,16 +254,16 @@ export const VisionFeed: React.FC = () => {
               "w-2.5 h-2.5 rounded-full",
               isStreaming ? "bg-green-500 animate-pulse" : "bg-slate-300"
             )} />
-            {isStreaming ? "Live Feed Active" : "Waiting for Access"}
+            {isStreaming ? "Active" : "Ready"}
           </div>
         </CardFooter>
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in delay-200">
         {[
-          { title: "Low Latency", desc: "Native browser stream ensures real-time performance.", icon: "⚡" },
-          { title: "Layered UI", desc: "Interactive canvas overlay perfectly synced with video.", icon: "🎨" },
-          { title: "Privacy First", desc: "No data is sent to servers. Processing happens on-device.", icon: "🔒" }
+          { title: "Native Flow", desc: "Hardware-accelerated rendering for zero lag.", icon: "⚡" },
+          { title: "Smart Sync", desc: "Canvas resolution automatically tracks video density.", icon: "🎯" },
+          { title: "Secure Stream", desc: "Local processing ensures your feed stays private.", icon: "🛡️" }
         ].map((feature, i) => (
           <Card key={i} className="bg-white/60 border-none shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="pb-2">
