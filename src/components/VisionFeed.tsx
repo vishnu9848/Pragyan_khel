@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, CameraOff, RefreshCw, AlertCircle, Box, Cpu, XCircle, Moon, Sun, Upload, Video, Maximize, Activity, Gauge } from 'lucide-react';
+import { Camera, CameraOff, RefreshCw, AlertCircle, Cpu, XCircle, Upload, Video, Maximize, Activity, Gauge, Sparkles, Target, Zap, Globe } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -39,9 +39,6 @@ export const VisionFeed: React.FC = () => {
   const frameCountRef = useRef(0);
   const isDetectingRef = useRef(false);
   const selectedObjectRef = useRef<cocoSsd.DetectedObject | null>(null);
-  const selectedHistoryRef = useRef<[number, number, number, number][]>([]);
-  const trackingConfidenceRef = useRef<number>(0);
-  const reacquisitionCountRef = useRef(0);
   
   const lastFpsUpdateRef = useRef(performance.now());
   const frameCountSinceUpdateRef = useRef(0);
@@ -209,13 +206,9 @@ export const VisionFeed: React.FC = () => {
             
             if (best && calculateIoU(best.bbox, current.bbox) > 0.3) {
               selectedObjectRef.current = best;
-              trackingConfidenceRef.current = calculateIoU(best.bbox, current.bbox);
               setIsReacquiring(false);
-              reacquisitionCountRef.current = 0;
             } else {
-              reacquisitionCountRef.current++;
-              if (reacquisitionCountRef.current > 5) setIsReacquiring(true);
-              if (reacquisitionCountRef.current > 100) { selectedObjectRef.current = null; setSelectedLabel(null); }
+              setIsReacquiring(true);
             }
           }
           isDetectingRef.current = false;
@@ -240,7 +233,7 @@ export const VisionFeed: React.FC = () => {
         focusAlphaRef.current = lerp(focusAlphaRef.current, 1.0, 0.1);
         focusScaleRef.current = lerp(focusScaleRef.current, 1.0, 0.1);
         if (isAutoZoomEnabled) {
-          targetZoom = 1.6;
+          targetZoom = 1.8;
           targetPanX = focusBboxRef.current[0] + focusBboxRef.current[2] / 2;
           targetPanY = focusBboxRef.current[1] + focusBboxRef.current[3] / 2;
         }
@@ -258,37 +251,44 @@ export const VisionFeed: React.FC = () => {
       ctx.scale(zoomFactorRef.current, zoomFactorRef.current);
       ctx.translate(-panXRef.current, -panYRef.current);
 
-      const blur = focusAlphaRef.current * 10;
-      const darken = 1.0 - (focusAlphaRef.current * 0.2);
-      ctx.filter = `blur(${blur}px) brightness(${darken})`;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      ctx.filter = "none";
-
-      if (focusBboxRef.current && focusAlphaRef.current > 0.01) {
-        const [fx, fy, fw, fh] = focusBboxRef.current;
-        const s = focusScaleRef.current;
-        const dw = fw * s, dh = fh * s;
-        const dx = fx + (fw - dw) / 2, dy = fy + (fh - dh) / 2;
-        ctx.save();
-        ctx.globalAlpha = focusAlphaRef.current;
-        ctx.beginPath();
-        ctx.rect(dx, dy, dw, dh);
-        ctx.clip();
+      if (focusAlphaRef.current > 0.01) {
+        ctx.filter = `blur(${focusAlphaRef.current * 12}px) grayscale(${focusAlphaRef.current * 0.3})`;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        ctx.restore();
-        
-        ctx.strokeStyle = '#10b981';
-        ctx.lineWidth = 4;
-        ctx.strokeRect(dx, dy, dw, dh);
+        ctx.filter = "none";
+
+        if (focusBboxRef.current) {
+          const [fx, fy, fw, fh] = focusBboxRef.current;
+          const s = focusScaleRef.current;
+          const dw = fw * s, dh = fh * s;
+          const dx = fx + (fw - dw) / 2, dy = fy + (fh - dh) / 2;
+          
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(dx, dy, dw, dh);
+          ctx.clip();
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          ctx.restore();
+          
+          ctx.strokeStyle = '#10b981';
+          ctx.lineWidth = 4;
+          ctx.setLineDash([]);
+          ctx.strokeRect(dx, dy, dw, dh);
+          
+          ctx.shadowColor = 'rgba(16, 185, 129, 0.4)';
+          ctx.shadowBlur = 12;
+          ctx.strokeRect(dx, dy, dw, dh);
+          ctx.shadowBlur = 0;
+        }
+      } else {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       }
 
       predictionsRef.current.forEach(p => {
         if (active && p.class === active.class) return;
         const [px, py, pw, ph] = p.bbox;
-        ctx.strokeStyle = 'rgba(16, 185, 129, 0.3)';
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.2)';
         ctx.setLineDash([5, 5]);
         ctx.strokeRect(px, py, pw, ph);
-        ctx.setLineDash([]);
       });
 
       ctx.restore();
@@ -339,7 +339,7 @@ export const VisionFeed: React.FC = () => {
         </CardHeader>
         
         <CardContent className="p-0 relative bg-slate-100/20">
-          <div className={cn("relative aspect-video flex items-center justify-center overflow-hidden", !isStreaming && "opacity-40")}>
+          <div className={cn("relative aspect-video flex items-center justify-center overflow-hidden", !isStreaming && "opacity-100")}>
             <video ref={videoRef} autoPlay playsInline muted className="hidden" />
             <canvas ref={canvasRef} onClick={handleCanvasClick} className={cn(
               "absolute inset-0 z-10 w-full h-full object-cover cursor-crosshair transition-opacity duration-1000",
@@ -347,17 +347,48 @@ export const VisionFeed: React.FC = () => {
             )} />
 
             {!isStreaming && !isLoading && (
-              <div className="z-10 flex flex-col items-center gap-8 animate-scale-in text-center p-12">
-                <div className="p-12 rounded-[3rem] bg-white border border-slate-200 shadow-sm animate-float">
-                   <div className="absolute inset-0 bg-primary/5 blur-3xl rounded-full scale-75 animate-pulse" />
-                   <Video className="w-16 h-16 text-slate-200 relative z-10" />
-                </div>
-                <div className="space-y-3 relative z-10">
-                  <div className="flex items-center justify-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-primary animate-ping" />
-                    <p className="text-xl font-bold tracking-widest text-slate-900 uppercase italic">Awaiting Interface</p>
+              <div className="z-10 flex flex-col items-center justify-center gap-12 animate-scale-in text-center p-12 w-full h-full min-h-[500px] bg-white relative">
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent opacity-40 animate-pulse-subtle" />
+                
+                {/* Visual Neural Core Animation */}
+                <div className="relative flex items-center justify-center w-80 h-80">
+                  {/* Outer Rings */}
+                  <div className="absolute inset-0 rounded-full border-[2px] border-dashed border-primary/30 animate-spin-slow" />
+                  <div className="absolute inset-4 rounded-full border-[1px] border-primary/20 animate-spin-reverse-slow" />
+                  <div className="absolute inset-8 rounded-full border-[4px] border-t-primary/40 border-r-transparent border-b-secondary/40 border-l-transparent animate-spin" />
+                  
+                  {/* Floating Data Nodes */}
+                  <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-4 h-4 bg-primary rounded-full blur-[2px] animate-float" />
+                  <div className="absolute bottom-10 right-10 w-3 h-3 bg-secondary rounded-full blur-[1px] animate-bounce" style={{ animationDuration: '3s' }} />
+                  <div className="absolute top-20 left-0 w-2 h-2 bg-primary/60 rounded-full animate-pulse" />
+
+                  {/* Central Core */}
+                  <div className="relative p-12 rounded-full bg-white border border-slate-100 shadow-[0_0_50px_rgba(16,185,129,0.2)] animate-pulse-subtle flex items-center justify-center group overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-tr from-primary/20 to-secondary/20 opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
+                    <Globe className="w-24 h-24 text-primary relative z-10 animate-spin-slow" />
+                    <Sparkles className="absolute top-8 right-8 w-6 h-6 text-secondary animate-pulse" />
+                    <Target className="absolute bottom-8 left-8 w-6 h-6 text-primary/40" />
                   </div>
-                  <p className="text-slate-400 text-[9px] font-mono tracking-[0.4em] uppercase">Connect Camera to Scan</p>
+                </div>
+
+                <div className="space-y-6 relative z-10">
+                  <div className="flex flex-col items-center gap-2">
+                    <p className="text-3xl font-black tracking-[0.2em] text-slate-900 uppercase italic flex items-center gap-4">
+                      <Zap className="w-8 h-8 text-primary animate-pulse" />
+                      Interface Ready
+                      <Activity className="w-8 h-8 text-secondary animate-pulse" />
+                    </p>
+                    <div className="h-1 w-48 bg-gradient-to-r from-transparent via-primary/30 to-transparent rounded-full" />
+                  </div>
+                  <div className="flex items-center justify-center gap-6">
+                    <Badge variant="outline" className="border-primary/20 text-primary font-mono text-[10px] uppercase tracking-[0.2em] px-4 py-1">
+                      Link Hardware
+                    </Badge>
+                    <div className="w-2 h-2 rounded-full bg-slate-200" />
+                    <Badge variant="outline" className="border-secondary/20 text-secondary font-mono text-[10px] uppercase tracking-[0.2em] px-4 py-1">
+                      Neural Sync
+                    </Badge>
+                  </div>
                 </div>
               </div>
             )}
@@ -412,7 +443,7 @@ export const VisionFeed: React.FC = () => {
               </div>
 
               {!isStreaming ? (
-                <Button onClick={sourceMode === 'camera' ? startCamera : () => fileInputRef.current?.click()} disabled={isLoading || isModelLoading} className="h-14 px-10 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all hover:scale-[1.03] active:scale-95 bg-primary hover:bg-primary/90 text-white shadow-lg shadow-primary/20">
+                <Button onClick={sourceMode === 'camera' ? startCamera : () => fileInputRef.current?.click()} disabled={isLoading || isModelLoading} className="h-14 px-10 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all hover:scale-[1.03] active:scale-95 bg-primary hover:bg-[#059669] text-white shadow-lg shadow-primary/20">
                   {sourceMode === 'camera' ? <Camera className="mr-3 h-4 w-4" /> : <Upload className="mr-3 h-4 w-4" />}
                   {sourceMode === 'camera' ? "Start Feed" : "Choose File"}
                 </Button>
