@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu } from 'lucide-react';
+import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, MousePointer2, XCircle } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -24,6 +24,7 @@ export const VisionFeed: React.FC = () => {
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
   const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
   const [isModelLoading, setIsModelLoading] = useState(true);
+  const [selectedObject, setSelectedObject] = useState<cocoSsd.DetectedObject | null>(null);
   
   const { toast } = useToast();
 
@@ -38,12 +39,11 @@ export const VisionFeed: React.FC = () => {
           base: 'lite_mobilenet_v2' // Using lite version for better browser performance
         });
         setModel(loadedModel);
-        console.log("Model loaded successfully");
       } catch (err) {
         console.error("Error loading model:", err);
         toast({
           title: "AI Model Failed",
-          description: "Could not initialize object detection. Check your connection.",
+          description: "Could not initialize object detection.",
           variant: "destructive",
         });
       } finally {
@@ -77,7 +77,7 @@ export const VisionFeed: React.FC = () => {
       setHasCameraPermission(false);
       toast({
         title: "Camera Access Failed",
-        description: "Please enable camera permissions in your browser settings to use this feature.",
+        description: "Please enable camera permissions in your browser settings.",
         variant: "destructive",
       });
     } finally {
@@ -95,6 +95,7 @@ export const VisionFeed: React.FC = () => {
     }
     setIsStreaming(false);
     predictionsRef.current = [];
+    setSelectedObject(null);
     
     // Clear canvas
     const canvas = canvasRef.current;
@@ -103,6 +104,33 @@ export const VisionFeed: React.FC = () => {
       ctx?.clearRect(0, 0, canvas.width, canvas.height);
     }
   }, [stream]);
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isStreaming || !canvasRef.current) return;
+
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    
+    // Calculate click coordinates relative to the canvas resolution
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    // Find the first object that contains the clicked point
+    const clickedObj = predictionsRef.current.find(prediction => {
+      const [bboxX, bboxY, width, height] = prediction.bbox;
+      return x >= bboxX && x <= bboxX + width && y >= bboxY && y <= bboxY + height;
+    });
+
+    if (clickedObj) {
+      setSelectedObject(clickedObj);
+      toast({
+        title: `Selected: ${clickedObj.class}`,
+        description: `Tracking this object at ${Math.round(clickedObj.score * 100)}% confidence.`,
+      });
+    } else {
+      setSelectedObject(null);
+    }
+  };
 
   // Handle detection loop (every 500ms)
   useEffect(() => {
@@ -114,6 +142,16 @@ export const VisionFeed: React.FC = () => {
           try {
             const predictions = await model.detect(videoRef.current);
             predictionsRef.current = predictions;
+            
+            // Try to update selected object position if it exists in the new predictions
+            if (selectedObject) {
+              const matchingObj = predictions.find(p => p.class === selectedObject.class);
+              if (matchingObj) {
+                // Simple heuristic: if same class exists, update the selection reference
+                // A better tracker would use IOU (Intersection Over Union)
+                setSelectedObject(matchingObj);
+              }
+            }
           } catch (err) {
             console.error("Detection error:", err);
           }
@@ -124,7 +162,7 @@ export const VisionFeed: React.FC = () => {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [isStreaming, model]);
+  }, [isStreaming, model, selectedObject]);
 
   // Clean up on unmount
   useEffect(() => {
@@ -158,55 +196,53 @@ export const VisionFeed: React.FC = () => {
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // 1. Draw UI Frame Corners
-      const time = Date.now() * 0.001;
-      ctx.strokeStyle = 'rgba(208, 188, 255, 0.4)';
-      ctx.lineWidth = Math.max(2, canvas.width * 0.005);
-      const cornerSize = canvas.width * 0.08;
-      const margin = canvas.width * 0.04;
-      
-      // Top Left
-      ctx.beginPath(); ctx.moveTo(margin, margin + cornerSize); ctx.lineTo(margin, margin); ctx.lineTo(margin + cornerSize, margin); ctx.stroke();
-      // Top Right
-      ctx.beginPath(); ctx.moveTo(canvas.width - margin - cornerSize, margin); ctx.lineTo(canvas.width - margin, margin); ctx.lineTo(canvas.width - margin, margin + cornerSize); ctx.stroke();
-      // Bottom Right
-      ctx.beginPath(); ctx.moveTo(canvas.width - margin, canvas.height - margin - cornerSize); ctx.lineTo(canvas.width - margin, canvas.height - margin); ctx.lineTo(canvas.width - margin - cornerSize, canvas.height - margin); ctx.stroke();
-      // Bottom Left
-      ctx.beginPath(); ctx.moveTo(margin + cornerSize, canvas.height - margin); ctx.lineTo(margin, canvas.height - margin); ctx.lineTo(margin, canvas.height - margin - cornerSize); ctx.stroke();
-
-      // 2. Draw Object Detections
+      // 1. Draw Object Detections
       const predictions = predictionsRef.current;
       
       predictions.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
         const score = Math.round(prediction.score * 100);
         
-        // Dynamic styling based on score
-        ctx.strokeStyle = '#D0BCFF'; // Lavender
-        ctx.fillStyle = '#D0BCFF';
-        ctx.lineWidth = 3;
+        // Determine if this object is the selected one
+        const isSelected = selectedObject && 
+          prediction.class === selectedObject.class && 
+          Math.abs(prediction.bbox[0] - selectedObject.bbox[0]) < 50;
+
+        // Dynamic styling based on selection
+        const primaryColor = isSelected ? '#22c55e' : '#ef4444'; // Green for selected, Red for others
+        const labelBg = isSelected ? 'rgba(21, 128, 61, 0.85)' : 'rgba(185, 28, 28, 0.85)';
+
+        ctx.strokeStyle = primaryColor;
+        ctx.lineWidth = isSelected ? 5 : 2;
 
         // Bounding Box
         ctx.strokeRect(x, y, width, height);
 
         // Label Background
-        const labelText = `${prediction.class} (${score}%)`;
+        const labelText = `${prediction.class}${isSelected ? ' (SELECTED)' : ''} ${score}%`;
         ctx.font = `bold ${Math.max(14, canvas.width * 0.015)}px sans-serif`;
         const textWidth = ctx.measureText(labelText).width;
         
-        ctx.fillStyle = 'rgba(103, 80, 164, 0.85)'; // Deep Purple
+        ctx.fillStyle = labelBg;
         ctx.fillRect(x, y - (canvas.width * 0.03), textWidth + 10, canvas.width * 0.03);
         
         ctx.fillStyle = 'white';
         ctx.fillText(labelText, x + 5, y - (canvas.width * 0.008));
       });
 
-      // Pulsing central crosshair (smaller when objects found)
-      const pulse = Math.sin(time * 5) * (predictions.length > 0 ? 5 : 12);
-      ctx.beginPath();
-      ctx.arc(canvas.width / 2, canvas.height / 2, (canvas.width * 0.02) + pulse, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(103, 80, 164, 0.2)';
-      ctx.fill();
+      // UI Frame Overlay (faded lavender)
+      ctx.strokeStyle = 'rgba(208, 188, 255, 0.3)';
+      ctx.lineWidth = 2;
+      const margin = canvas.width * 0.04;
+      const corner = canvas.width * 0.08;
+      // Top Left
+      ctx.beginPath(); ctx.moveTo(margin, margin + corner); ctx.lineTo(margin, margin); ctx.lineTo(margin + corner, margin); ctx.stroke();
+      // Top Right
+      ctx.beginPath(); ctx.moveTo(canvas.width - margin - corner, margin); ctx.lineTo(canvas.width - margin, margin); ctx.lineTo(canvas.width - margin, margin + corner); ctx.stroke();
+      // Bottom Right
+      ctx.beginPath(); ctx.moveTo(canvas.width - margin, canvas.height - margin - corner); ctx.lineTo(canvas.width - margin, canvas.height - margin); ctx.lineTo(canvas.width - margin - corner, canvas.height - margin); ctx.stroke();
+      // Bottom Left
+      ctx.beginPath(); ctx.moveTo(margin + corner, canvas.height - margin); ctx.lineTo(margin, canvas.height - margin); ctx.lineTo(margin, canvas.height - margin - corner); ctx.stroke();
 
       animationFrameId = requestAnimationFrame(render);
     };
@@ -218,12 +254,27 @@ export const VisionFeed: React.FC = () => {
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [isStreaming]);
+  }, [isStreaming, selectedObject]);
 
   return (
     <div className="w-full max-w-4xl mx-auto p-4 md:p-8 space-y-8 animate-fade-in">
       <Card className="overflow-hidden shadow-2xl border-none bg-white/80 backdrop-blur-sm">
-        <CardHeader className="text-center pb-4">
+        <CardHeader className="text-center pb-4 relative">
+          {selectedObject && (
+            <div className="absolute top-4 right-4 animate-scale-in">
+              <Badge variant="default" className="bg-green-600 hover:bg-green-700 gap-2 pl-3 py-1 pr-1">
+                Selected: {selectedObject.class}
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-5 w-5 rounded-full hover:bg-green-500/50 p-0"
+                  onClick={() => setSelectedObject(null)}
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </Button>
+              </Badge>
+            </div>
+          )}
           <div className="flex justify-center mb-2">
             {isModelLoading ? (
               <Badge variant="secondary" className="animate-pulse gap-1">
@@ -240,7 +291,7 @@ export const VisionFeed: React.FC = () => {
             Vision Stream
           </CardTitle>
           <CardDescription className="text-lg">
-            Real-time object detection powered by TensorFlow COCO-SSD.
+            Click objects on the stream to select and track them.
           </CardDescription>
         </CardHeader>
         
@@ -262,9 +313,10 @@ export const VisionFeed: React.FC = () => {
             
             <canvas
               ref={canvasRef}
+              onClick={handleCanvasClick}
               className={cn(
-                "absolute inset-0 pointer-events-none transition-opacity duration-700 w-full h-full object-contain",
-                isStreaming ? "opacity-100" : "opacity-0"
+                "absolute inset-0 z-10 transition-opacity duration-700 w-full h-full object-contain cursor-crosshair",
+                isStreaming ? "opacity-100" : "opacity-0 pointer-events-none"
               )}
             />
 
@@ -290,7 +342,7 @@ export const VisionFeed: React.FC = () => {
                 <AlertCircle className="h-4 w-4" />
                 <AlertTitle>Access Required</AlertTitle>
                 <AlertDescription>
-                  Camera access was denied. Please check your browser's site permissions and try again.
+                  Camera access was denied. Please check your browser's site permissions.
                 </AlertDescription>
               </Alert>
             </div>
@@ -321,22 +373,14 @@ export const VisionFeed: React.FC = () => {
               <CameraOff className="mr-2 h-5 w-5" /> Stop Stream
             </Button>
           )}
-          
-          <div className="hidden sm:flex items-center gap-2 px-6 py-3 rounded-full bg-white/50 border border-border text-sm font-medium text-muted-foreground">
-            <div className={cn(
-              "w-2.5 h-2.5 rounded-full",
-              isStreaming ? "bg-green-500 animate-pulse" : "bg-slate-300"
-            )} />
-            {isStreaming ? "Detection Active" : "Ready"}
-          </div>
         </CardFooter>
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in delay-200">
         {[
-          { title: "Neural Flow", desc: "COCO-SSD model running locally in-browser.", icon: <Cpu className="w-6 h-6 text-primary" /> },
-          { title: "Smart Logic", desc: "Detection interval optimized at 2Hz for battery efficiency.", icon: <Box className="w-6 h-6 text-primary" /> },
-          { title: "Privacy First", desc: "Zero video data leaves your device. Local only.", icon: <Sparkles className="w-6 h-6 text-primary" /> }
+          { title: "Point & Select", desc: "Click any detected object to highlight it globally.", icon: <MousePointer2 className="w-6 h-6 text-primary" /> },
+          { title: "Visual Logic", desc: "Selected objects turn green, others stay red for clarity.", icon: <Box className="w-6 h-6 text-primary" /> },
+          { title: "Neural Engine", desc: "Local TensorFlow COCO-SSD detection running at 2Hz.", icon: <Cpu className="w-6 h-6 text-primary" /> }
         ].map((feature, i) => (
           <Card key={i} className="bg-white/60 border-none shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="pb-2">
