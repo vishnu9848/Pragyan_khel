@@ -94,6 +94,8 @@ export const VisionFeed: React.FC = () => {
       setHasCameraPermission(true);
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
+        // Ensure video actually plays
+        await videoRef.current.play();
       }
       setIsStreaming(true);
     } catch (err) {
@@ -182,9 +184,6 @@ export const VisionFeed: React.FC = () => {
               // Update track if overlap is significant
               if (maxIoU > 0.5 && bestMatch) {
                 setSelectedObject(bestMatch);
-              } else if (maxIoU < 0.2) {
-                // We don't automatically clear to avoid flickering, 
-                // but the visual focus will stay on the last known location.
               }
             }
           } catch (err) {
@@ -204,13 +203,16 @@ export const VisionFeed: React.FC = () => {
     let animationFrameId: number;
 
     const render = () => {
-      if (!isStreaming || !canvasRef.current || !videoRef.current) return;
+      if (!isStreaming || !canvasRef.current || !videoRef.current) {
+        if (isStreaming) animationFrameId = requestAnimationFrame(render);
+        return;
+      }
       
       const canvas = canvasRef.current;
       const video = videoRef.current;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { alpha: false });
       
-      if (!ctx || video.videoWidth === 0) {
+      if (!ctx || video.readyState < 2 || video.videoWidth === 0) {
         animationFrameId = requestAnimationFrame(render);
         return;
       }
@@ -251,28 +253,28 @@ export const VisionFeed: React.FC = () => {
         // Check if this detection is the current focus
         const isSelected = selectedObject && 
           prediction.class === selectedObject.class && 
-          calculateIoU(prediction.bbox, selectedObject.bbox) > 0.9;
+          calculateIoU(prediction.bbox, selectedObject.bbox) > 0.8;
 
         const primaryColor = isSelected ? '#22c55e' : 'rgba(239, 68, 68, 0.4)';
         const labelBg = isSelected ? 'rgba(21, 128, 61, 0.9)' : 'rgba(185, 28, 28, 0.5)';
 
         ctx.strokeStyle = primaryColor;
-        ctx.lineWidth = isSelected ? 4 : 1;
+        ctx.lineWidth = isSelected ? 4 : 2;
         ctx.strokeRect(x, y, width, height);
 
         const labelText = `${prediction.class} ${score}%`;
-        ctx.font = `bold ${Math.max(12, canvas.width * 0.012)}px sans-serif`;
+        ctx.font = `bold ${Math.max(14, canvas.width * 0.012)}px sans-serif`;
         const textWidth = ctx.measureText(labelText).width;
         
         ctx.fillStyle = labelBg;
-        ctx.fillRect(x, y - (canvas.width * 0.025), textWidth + 10, canvas.width * 0.025);
+        ctx.fillRect(x, y - (canvas.width * 0.03), textWidth + 12, canvas.width * 0.03);
         
         ctx.fillStyle = 'white';
-        ctx.fillText(labelText, x + 5, y - (canvas.width * 0.007));
+        ctx.fillText(labelText, x + 6, y - (canvas.width * 0.008));
       });
 
       // 4. Draw HUD Corners
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
       ctx.lineWidth = 2;
       const m = canvas.width * 0.05;
       const l = canvas.width * 0.08;
@@ -337,13 +339,17 @@ export const VisionFeed: React.FC = () => {
             "relative aspect-video bg-muted flex flex-col items-center justify-center overflow-hidden transition-all duration-500",
             !isStreaming && "bg-slate-100"
           )}>
-            {/* The video element is hidden but used as the source for drawing on the canvas */}
+            {/* 
+                Always show video tag to prevent browser race conditions.
+                Use opacity-0 instead of hidden to ensure the video stream 
+                actually renders and provides frames to the canvas.
+            */}
             <video
               ref={videoRef}
               autoPlay
               playsInline
               muted
-              className="hidden"
+              className="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none"
             />
             
             <canvas
