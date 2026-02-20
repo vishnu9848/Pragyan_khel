@@ -2,12 +2,14 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, MousePointer2, XCircle } from 'lucide-react';
+import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, MousePointer2, XCircle, Moon, Sun } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 
 // TensorFlow imports
 import * as tf from '@tensorflow/tfjs';
@@ -54,6 +56,7 @@ export const VisionFeed: React.FC = () => {
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
   const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
   const [isModelLoading, setIsModelLoading] = useState(true);
+  const [isLowLight, setIsLowLight] = useState(false);
   
   // Keep a state version for UI labels, synchronized with ref
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
@@ -158,7 +161,8 @@ export const VisionFeed: React.FC = () => {
       const clickedObj = candidates.sort((a, b) => (a.bbox[2] * a.bbox[3]) - (b.bbox[2] * b.bbox[3]))[0];
       
       // Update ref immediately to reset tracking logic to the new object
-      selectedObjectRef.current = { ...clickedObj };
+      // Clone the object to prevent reference updates from standard detection cycles affecting the switch logic
+      selectedObjectRef.current = JSON.parse(JSON.stringify(clickedObj));
       setSelectedLabel(clickedObj.class);
       
       toast({
@@ -200,6 +204,7 @@ export const VisionFeed: React.FC = () => {
       if (frameCountRef.current % 10 === 0 && model && !isDetectingRef.current) {
         isDetectingRef.current = true;
         
+        // Inference runs on the raw video stream
         model.detect(video).then(predictions => {
           predictionsRef.current = predictions;
           
@@ -237,10 +242,14 @@ export const VisionFeed: React.FC = () => {
       }
       frameCountRef.current++;
 
+      // Enhancement filter setup
+      const enhancementFilter = isLowLight ? "contrast(1.2) brightness(1.1) " : "";
+
       // 2. Draw Blurred Background
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
-      ctx.filter = "blur(12px) brightness(0.8)";
+      // Combine background blur with optional low-light enhancement
+      ctx.filter = `${enhancementFilter}blur(12px) brightness(0.8)`;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       ctx.restore();
 
@@ -249,6 +258,7 @@ export const VisionFeed: React.FC = () => {
       if (activeSelection) {
         const [x, y, width, height] = activeSelection.bbox;
         ctx.save();
+        ctx.filter = isLowLight ? "contrast(1.2) brightness(1.1)" : "none";
         ctx.beginPath();
         ctx.rect(x, y, width, height);
         ctx.clip();
@@ -305,7 +315,7 @@ export const VisionFeed: React.FC = () => {
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [isStreaming, model]);
+  }, [isStreaming, model, isLowLight]);
 
   return (
     <div className="w-full max-w-4xl mx-auto p-4 md:p-8 space-y-8 animate-fade-in">
@@ -354,6 +364,7 @@ export const VisionFeed: React.FC = () => {
             "relative aspect-video bg-muted flex flex-col items-center justify-center overflow-hidden transition-all duration-500",
             !isStreaming && "bg-slate-100"
           )}>
+            {/* Using opacity-0 instead of display:none to keep the video element active for the render loop */}
             <video
               ref={videoRef}
               autoPlay
@@ -400,30 +411,55 @@ export const VisionFeed: React.FC = () => {
           )}
         </CardContent>
 
-        <CardFooter className="flex flex-col sm:flex-row gap-4 p-8 justify-center bg-secondary/10 border-t border-secondary/20">
-          {!isStreaming ? (
-            <Button 
-              size="lg" 
-              onClick={startCamera} 
-              disabled={isLoading || isModelLoading}
-              className="px-10 h-14 rounded-full text-lg font-semibold transition-all hover:scale-105 active:scale-95 shadow-lg shadow-primary/20"
-            >
-              {isLoading ? (
-                <><RefreshCw className="mr-2 h-5 w-5 animate-spin" /> Initializing...</>
+        <CardFooter className="flex flex-col gap-6 p-8 bg-secondary/10 border-t border-secondary/20">
+          <div className="flex flex-col sm:flex-row items-center justify-between w-full gap-4">
+            <div className="flex items-center space-x-4 bg-white/50 px-4 py-2 rounded-full border border-primary/10 shadow-sm">
+              <div className="flex items-center gap-2">
+                {isLowLight ? <Moon className="w-4 h-4 text-primary" /> : <Sun className="w-4 h-4 text-muted-foreground" />}
+                <Label htmlFor="low-light" className="text-sm font-semibold whitespace-nowrap">
+                  Low Light Mode
+                </Label>
+              </div>
+              <Switch 
+                id="low-light" 
+                checked={isLowLight} 
+                onCheckedChange={setIsLowLight}
+                disabled={!isStreaming}
+              />
+            </div>
+
+            <div className="flex gap-4">
+              {!isStreaming ? (
+                <Button 
+                  size="lg" 
+                  onClick={startCamera} 
+                  disabled={isLoading || isModelLoading}
+                  className="px-10 h-14 rounded-full text-lg font-semibold transition-all hover:scale-105 active:scale-95 shadow-lg shadow-primary/20"
+                >
+                  {isLoading ? (
+                    <><RefreshCw className="mr-2 h-5 w-5 animate-spin" /> Initializing...</>
+                  ) : (
+                    <><Camera className="mr-2 h-5 w-5" /> Start Live Stream</>
+                  )}
+                </Button>
               ) : (
-                <><Camera className="mr-2 h-5 w-5" /> Start Live Stream</>
+                <Button 
+                  variant="destructive" 
+                  size="lg" 
+                  onClick={stopCamera}
+                  className="px-10 h-14 rounded-full text-lg font-semibold transition-all hover:scale-105 active:scale-95 shadow-lg shadow-destructive/20"
+                >
+                  <CameraOff className="mr-2 h-5 w-5" /> Stop Stream
+                </Button>
               )}
-            </Button>
-          ) : (
-            <Button 
-              variant="destructive" 
-              size="lg" 
-              onClick={stopCamera}
-              className="px-10 h-14 rounded-full text-lg font-semibold transition-all hover:scale-105 active:scale-95 shadow-lg shadow-destructive/20"
-            >
-              <CameraOff className="mr-2 h-5 w-5" /> Stop Stream
-            </Button>
-          )}
+            </div>
+          </div>
+          
+          <div className="text-center">
+            <p className="text-xs text-muted-foreground max-w-sm mx-auto">
+              Click any object in the stream to lock focus. {isLowLight && "Low Light Mode is applying contrast enhancement filters."}
+            </p>
+          </div>
         </CardFooter>
       </Card>
 
