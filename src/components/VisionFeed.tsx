@@ -274,6 +274,19 @@ export const VisionFeed: React.FC = () => {
           ctx.setLineDash([]);
           ctx.strokeRect(dx, dy, dw, dh);
           
+          // Draw Label Tag
+          if (active) {
+            const label = `${active.class.toUpperCase()} ${Math.round(active.score * 100)}%`;
+            ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+            const textWidth = ctx.measureText(label).width;
+            
+            ctx.fillStyle = '#10b981';
+            ctx.fillRect(dx - 2, dy - 28, textWidth + 16, 28);
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(label, dx + 6, dy - 10);
+          }
+          
           ctx.shadowColor = 'rgba(16, 185, 129, 0.4)';
           ctx.shadowBlur = 12;
           ctx.strokeRect(dx, dy, dw, dh);
@@ -289,6 +302,12 @@ export const VisionFeed: React.FC = () => {
         ctx.strokeStyle = 'rgba(16, 185, 129, 0.2)';
         ctx.setLineDash([5, 5]);
         ctx.strokeRect(px, py, pw, ph);
+        
+        // Draw small label for unselected objects
+        ctx.font = 'bold 10px Inter, system-ui, sans-serif';
+        const label = `${p.class.toUpperCase()} ${Math.round(p.score * 100)}%`;
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.6)';
+        ctx.fillText(label, px + 4, py + 14);
       });
 
       ctx.restore();
@@ -311,7 +330,9 @@ export const VisionFeed: React.FC = () => {
                 isReacquiring ? "bg-amber-100 text-amber-600 animate-pulse" : "bg-primary/10 text-primary emerald-glow"
               )}>
                 <span className="text-[10px] uppercase tracking-widest">{isReacquiring ? "Seeking" : "Locked"}</span>
-                <span className="text-sm px-1">{selectedLabel}</span>
+                <span className="text-sm px-1">
+                  {selectedLabel} {selectedObjectRef.current ? `(${Math.round(selectedObjectRef.current.score * 100)}%)` : ''}
+                </span>
                 <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full hover:bg-black/5" onClick={() => { selectedObjectRef.current = null; setSelectedLabel(null); }}>
                   <XCircle className="w-4 h-4 opacity-40" />
                 </Button>
@@ -350,19 +371,15 @@ export const VisionFeed: React.FC = () => {
               <div className="z-10 flex flex-col items-center justify-center gap-12 animate-scale-in text-center p-12 w-full h-full min-h-[500px] bg-white relative">
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent opacity-40 animate-pulse-subtle" />
                 
-                {/* Visual Neural Core Animation */}
                 <div className="relative flex items-center justify-center w-80 h-80">
-                  {/* Outer Rings */}
                   <div className="absolute inset-0 rounded-full border-[2px] border-dashed border-primary/30 animate-spin-slow" />
                   <div className="absolute inset-4 rounded-full border-[1px] border-primary/20 animate-spin-reverse-slow" />
                   <div className="absolute inset-8 rounded-full border-[4px] border-t-primary/40 border-r-transparent border-b-secondary/40 border-l-transparent animate-spin" />
                   
-                  {/* Floating Data Nodes */}
                   <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-4 h-4 bg-primary rounded-full blur-[2px] animate-float" />
                   <div className="absolute bottom-10 right-10 w-3 h-3 bg-secondary rounded-full blur-[1px] animate-bounce" style={{ animationDuration: '3s' }} />
                   <div className="absolute top-20 left-0 w-2 h-2 bg-primary/60 rounded-full animate-pulse" />
 
-                  {/* Central Core */}
                   <div className="relative p-12 rounded-full bg-white border border-slate-100 shadow-[0_0_50px_rgba(16,185,129,0.2)] animate-pulse-subtle flex items-center justify-center group overflow-hidden">
                     <div className="absolute inset-0 bg-gradient-to-tr from-primary/20 to-secondary/20 opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
                     <Globe className="w-24 h-24 text-primary relative z-10 animate-spin-slow" />
