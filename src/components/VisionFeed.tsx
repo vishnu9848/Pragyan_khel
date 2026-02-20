@@ -41,7 +41,12 @@ const calculateIoU = (bbox1: [number, number, number, number], bbox2: [number, n
 export const VisionFeed: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Refs for tracking and detection state without triggering re-renders
   const predictionsRef = useRef<cocoSsd.DetectedObject[]>([]);
+  const frameCountRef = useRef(0);
+  const isDetectingRef = useRef(false);
+  const selectedObjectRef = useRef<cocoSsd.DetectedObject | null>(null);
   
   const [isStreaming, setIsStreaming] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -49,7 +54,9 @@ export const VisionFeed: React.FC = () => {
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
   const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
   const [isModelLoading, setIsModelLoading] = useState(true);
-  const [selectedObject, setSelectedObject] = useState<cocoSsd.DetectedObject | null>(null);
+  
+  // Keep a state version for UI labels, synchronized with ref
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
   
   const { toast } = useToast();
 
@@ -94,7 +101,6 @@ export const VisionFeed: React.FC = () => {
       setHasCameraPermission(true);
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
-        // Ensure video actually plays
         await videoRef.current.play();
       }
       setIsStreaming(true);
@@ -121,7 +127,8 @@ export const VisionFeed: React.FC = () => {
     }
     setIsStreaming(false);
     predictionsRef.current = [];
-    setSelectedObject(null);
+    selectedObjectRef.current = null;
+    setSelectedLabel(null);
     
     const canvas = canvasRef.current;
     if (canvas) {
@@ -145,60 +152,19 @@ export const VisionFeed: React.FC = () => {
     });
 
     if (clickedObj) {
-      setSelectedObject(clickedObj);
+      selectedObjectRef.current = clickedObj;
+      setSelectedLabel(clickedObj.class);
       toast({
         title: `Selected: ${clickedObj.class}`,
         description: `Focusing on this object.`,
       });
     } else {
-      setSelectedObject(null);
+      selectedObjectRef.current = null;
+      setSelectedLabel(null);
     }
   };
 
-  // Detection and Tracking Loop (500ms intervals)
-  useEffect(() => {
-    let intervalId: NodeJS.Timeout;
-
-    if (isStreaming && model && videoRef.current) {
-      intervalId = setInterval(async () => {
-        if (videoRef.current && videoRef.current.readyState === 4) {
-          try {
-            const predictions = await model.detect(videoRef.current);
-            predictionsRef.current = predictions;
-            
-            // IoU-based Tracking Logic for selection
-            if (selectedObject) {
-              let bestMatch: cocoSsd.DetectedObject | null = null;
-              let maxIoU = 0;
-
-              for (const prediction of predictions) {
-                if (prediction.class === selectedObject.class) {
-                  const iou = calculateIoU(prediction.bbox, selectedObject.bbox);
-                  if (iou > maxIoU) {
-                    maxIoU = iou;
-                    bestMatch = prediction;
-                  }
-                }
-              }
-
-              // Update track if overlap is significant
-              if (maxIoU > 0.5 && bestMatch) {
-                setSelectedObject(bestMatch);
-              }
-            }
-          } catch (err) {
-            console.error("Detection error:", err);
-          }
-        }
-      }, 500);
-    }
-
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [isStreaming, model, selectedObject]);
-
-  // Visualization Effect (Animation Frame Loop)
+  // Unified Visualization and Detection Effect
   useEffect(() => {
     let animationFrameId: number;
 
@@ -217,43 +183,82 @@ export const VisionFeed: React.FC = () => {
         return;
       }
 
+      // Sync canvas resolution
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
       }
 
-      // 1. Draw Blurred Background
+      // 1. Detection Throttling (Every 10 frames)
+      if (frameCountRef.current % 10 === 0 && model && !isDetectingRef.current) {
+        isDetectingRef.current = true;
+        
+        // Non-blocking detection
+        model.detect(video).then(predictions => {
+          predictionsRef.current = predictions;
+          
+          // IoU Tracking Update
+          const currentSelected = selectedObjectRef.current;
+          if (currentSelected) {
+            let bestMatch: cocoSsd.DetectedObject | null = null;
+            let maxIoU = 0;
+
+            for (const prediction of predictions) {
+              if (prediction.class === currentSelected.class) {
+                const iou = calculateIoU(prediction.bbox, currentSelected.bbox);
+                if (iou > maxIoU) {
+                  maxIoU = iou;
+                  bestMatch = prediction;
+                }
+              }
+            }
+
+            // Update ref if overlap is significant
+            if (maxIoU > 0.4 && bestMatch) {
+              selectedObjectRef.current = bestMatch;
+            } else if (maxIoU < 0.2) {
+              // Lost tracking - clear selection if too far off
+              // selectedObjectRef.current = null;
+              // setSelectedLabel(null);
+            }
+          }
+          
+          isDetectingRef.current = false;
+        }).catch(err => {
+          console.error("AI Detection error:", err);
+          isDetectingRef.current = false;
+        });
+      }
+      frameCountRef.current++;
+
+      // 2. Draw Blurred Background
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
       ctx.filter = "blur(12px) brightness(0.8)";
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       ctx.restore();
 
-      // 2. Draw Sharp Focus Area (Selected Object)
-      if (selectedObject) {
-        const [x, y, width, height] = selectedObject.bbox;
+      // 3. Draw Sharp Focus Area
+      const activeSelection = selectedObjectRef.current;
+      if (activeSelection) {
+        const [x, y, width, height] = activeSelection.bbox;
         ctx.save();
-        
-        // Create clipping region for the sharp area
         ctx.beginPath();
         ctx.rect(x, y, width, height);
         ctx.clip();
-        
-        // Draw the video again (no filter means sharp)
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         ctx.restore();
       }
 
-      // 3. Draw Overlays (Bounding Boxes & Labels)
+      // 4. Draw Overlays
       const predictions = predictionsRef.current;
       predictions.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
         const score = Math.round(prediction.score * 100);
         
-        // Check if this detection is the current focus
-        const isSelected = selectedObject && 
-          prediction.class === selectedObject.class && 
-          calculateIoU(prediction.bbox, selectedObject.bbox) > 0.8;
+        const isSelected = activeSelection && 
+          prediction.class === activeSelection.class && 
+          calculateIoU(prediction.bbox, activeSelection.bbox) > 0.7;
 
         const primaryColor = isSelected ? '#22c55e' : 'rgba(239, 68, 68, 0.4)';
         const labelBg = isSelected ? 'rgba(21, 128, 61, 0.9)' : 'rgba(185, 28, 28, 0.5)';
@@ -273,7 +278,7 @@ export const VisionFeed: React.FC = () => {
         ctx.fillText(labelText, x + 6, y - (canvas.width * 0.008));
       });
 
-      // 4. Draw HUD Corners
+      // 5. Draw HUD Corners
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
       ctx.lineWidth = 2;
       const m = canvas.width * 0.05;
@@ -293,21 +298,24 @@ export const VisionFeed: React.FC = () => {
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [isStreaming, selectedObject]);
+  }, [isStreaming, model]);
 
   return (
     <div className="w-full max-w-4xl mx-auto p-4 md:p-8 space-y-8 animate-fade-in">
       <Card className="overflow-hidden shadow-2xl border-none bg-white/80 backdrop-blur-sm">
         <CardHeader className="text-center pb-4 relative">
-          {selectedObject && (
+          {selectedLabel && (
             <div className="absolute top-4 right-4 animate-scale-in">
               <Badge variant="default" className="bg-green-600 hover:bg-green-700 gap-2 pl-3 py-1 pr-1 shadow-lg">
-                Focus: {selectedObject.class}
+                Focus: {selectedLabel}
                 <Button 
                   variant="ghost" 
                   size="icon" 
                   className="h-5 w-5 rounded-full hover:bg-green-500/50 p-0"
-                  onClick={() => setSelectedObject(null)}
+                  onClick={() => {
+                    selectedObjectRef.current = null;
+                    setSelectedLabel(null);
+                  }}
                 >
                   <XCircle className="w-3.5 h-3.5" />
                 </Button>
@@ -321,7 +329,7 @@ export const VisionFeed: React.FC = () => {
               </Badge>
             ) : (
               <Badge variant="outline" className="text-primary border-primary/20 gap-1 bg-primary/5">
-                <Cpu className="w-3 h-3" /> Selective Focus Enabled
+                <Cpu className="w-3 h-3" /> Throttled Inference Loop
               </Badge>
             )}
           </div>
@@ -339,11 +347,6 @@ export const VisionFeed: React.FC = () => {
             "relative aspect-video bg-muted flex flex-col items-center justify-center overflow-hidden transition-all duration-500",
             !isStreaming && "bg-slate-100"
           )}>
-            {/* 
-                Always show video tag to prevent browser race conditions.
-                Use opacity-0 instead of hidden to ensure the video stream 
-                actually renders and provides frames to the canvas.
-            */}
             <video
               ref={videoRef}
               autoPlay
@@ -419,9 +422,9 @@ export const VisionFeed: React.FC = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in delay-200">
         {[
-          { title: "Selective Blur", desc: "Background and other objects are blurred while your selection remains sharp.", icon: <Sparkles className="w-6 h-6 text-primary" /> },
-          { title: "Smart Tracking", desc: "AI matching ensures focus follows your target smoothly across the frame.", icon: <Box className="w-6 h-6 text-primary" /> },
-          { title: "Interactive Focus", desc: "Click any detected object to instantly shift the vision focus.", icon: <MousePointer2 className="w-6 h-6 text-primary" /> }
+          { title: "Optimized Loop", desc: "Detection runs every 10 frames while rendering stays at a smooth 60 FPS.", icon: <Cpu className="w-6 h-6 text-primary" /> },
+          { title: "Smart Tracking", desc: "IoU-based matching follows your target even between inference cycles.", icon: <Box className="w-6 h-6 text-primary" /> },
+          { title: "Interactive Focus", desc: "Click any detected object to instantly focus the AI's selective attention.", icon: <MousePointer2 className="w-6 h-6 text-primary" /> }
         ].map((feature, i) => (
           <Card key={i} className="bg-white/60 border-none shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="pb-2">
