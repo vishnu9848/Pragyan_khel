@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, XCircle, Moon, Sun, Upload, Video, Maximize, Activity } from 'lucide-react';
+import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, XCircle, Moon, Sun, Upload, Video, Maximize, Activity, Gauge } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -54,6 +54,11 @@ export const VisionFeed: React.FC = () => {
   const trackingConfidenceRef = useRef<number>(0);
   const reacquisitionCountRef = useRef(0);
   
+  // Performance Monitor Refs
+  const lastFpsUpdateRef = useRef(performance.now());
+  const frameCountSinceUpdateRef = useRef(0);
+  const detectionTimeRef = useRef(0);
+  
   // Animation & Interpolation refs
   const zoomFactorRef = useRef(1);
   const panXRef = useRef(0);
@@ -74,6 +79,10 @@ export const VisionFeed: React.FC = () => {
   const [sourceMode, setSourceMode] = useState<'camera' | 'file'>('camera');
   const [videoFileUrl, setVideoFileUrl] = useState<string | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+  
+  // Performance State
+  const [fps, setFps] = useState(0);
+  const [inferenceTime, setInferenceTime] = useState(0);
   
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
   const { toast } = useToast();
@@ -127,6 +136,8 @@ export const VisionFeed: React.FC = () => {
     focusBboxRef.current = null;
     focusAlphaRef.current = 0;
     focusScaleRef.current = 0.8;
+    setFps(0);
+    setInferenceTime(0);
     
     const canvas = canvasRef.current;
     if (canvas) {
@@ -250,10 +261,22 @@ export const VisionFeed: React.FC = () => {
         panYRef.current = canvas.height / 2;
       }
 
+      // Performance calculations
+      const now = performance.now();
+      frameCountSinceUpdateRef.current++;
+      if (now - lastFpsUpdateRef.current >= 1000) {
+        setFps(Math.round((frameCountSinceUpdateRef.current * 1000) / (now - lastFpsUpdateRef.current)));
+        setInferenceTime(detectionTimeRef.current);
+        lastFpsUpdateRef.current = now;
+        frameCountSinceUpdateRef.current = 0;
+      }
+
       const detectionFrequency = isReacquiring ? 3 : 10;
       if (frameCountRef.current % detectionFrequency === 0 && model && !isDetectingRef.current) {
         isDetectingRef.current = true;
+        const startDetect = performance.now();
         model.detect(video).then(predictions => {
+          detectionTimeRef.current = Math.round(performance.now() - startDetect);
           predictionsRef.current = predictions;
           const currentSelected = selectedObjectRef.current;
           
@@ -523,6 +546,20 @@ export const VisionFeed: React.FC = () => {
                   <div className="absolute inset-0 bg-primary/30 blur-[60px]" />
                 </div>
                 <p className="font-black text-xs tracking-[0.4em] text-primary uppercase animate-pulse">Establishing Neural Link</p>
+              </div>
+            )}
+            
+            {/* Performance Overlay */}
+            {isStreaming && (
+              <div className="absolute bottom-4 left-4 z-30 flex gap-2">
+                <Badge variant="outline" className="bg-black/40 backdrop-blur-md border-white/10 text-[10px] font-mono py-1.5 px-3 rounded-full flex gap-2 items-center">
+                  <Gauge className="w-3 h-3 text-accent" />
+                  <span className="text-accent">{fps} FPS</span>
+                </Badge>
+                <Badge variant="outline" className="bg-black/40 backdrop-blur-md border-white/10 text-[10px] font-mono py-1.5 px-3 rounded-full flex gap-2 items-center">
+                  <Cpu className="w-3 h-3 text-primary" />
+                  <span className="text-primary">{inferenceTime}ms INF</span>
+                </Badge>
               </div>
             )}
           </div>
