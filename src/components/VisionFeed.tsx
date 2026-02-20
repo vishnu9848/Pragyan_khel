@@ -529,14 +529,25 @@ export const VisionFeed: React.FC = () => {
             )} />
 
             {!isStreaming && !isLoading && (
-              <div className="z-10 flex flex-col items-center gap-10 animate-scale-in text-center">
-                <div className="p-16 rounded-[4rem] bg-white/[0.02] border border-white/5 backdrop-blur-3xl ring-1 ring-white/5 relative group">
-                  <div className="absolute inset-0 bg-primary/5 blur-3xl rounded-full scale-75 group-hover:scale-100 transition-transform duration-1000" />
-                  <Video className="w-20 h-20 text-white/10 relative z-10" />
+              <div className="z-10 flex flex-col items-center gap-10 animate-scale-in text-center relative w-full h-full">
+                {/* Dynamic Background Scanning Animation */}
+                <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-1 bg-accent/20 blur-sm animate-scan" />
+                  <div className="absolute inset-0 bg-gradient-to-b from-transparent via-accent/5 to-transparent opacity-30 animate-pulse" />
                 </div>
-                <div className="space-y-4">
-                  <p className="text-2xl font-black tracking-widest text-white/80 uppercase italic">Awaiting Interface</p>
-                  <p className="text-muted-foreground/40 text-[10px] font-mono tracking-[0.4em]">CONNECT HARDWARE TO INITIATE SCAN</p>
+
+                <div className="p-16 rounded-[4rem] bg-white/[0.02] border border-white/5 backdrop-blur-3xl ring-1 ring-white/5 relative group animate-float">
+                  <div className="absolute inset-0 bg-primary/10 blur-[80px] rounded-full scale-90 group-hover:scale-110 transition-transform duration-1000 animate-pulse" />
+                  <div className="absolute -inset-4 border border-white/5 rounded-[4.5rem] animate-[ping_3s_linear_infinite] opacity-20" />
+                  <Video className="w-20 h-20 text-white/10 relative z-10 group-hover:text-accent/40 transition-colors duration-500" />
+                </div>
+
+                <div className="space-y-4 relative z-10">
+                  <div className="flex items-center justify-center gap-3">
+                    <div className="w-2 h-2 rounded-full bg-accent animate-pulse shadow-[0_0_10px_rgba(20,255,210,0.8)]" />
+                    <p className="text-2xl font-black tracking-widest text-white/80 uppercase italic">Awaiting Interface</p>
+                  </div>
+                  <p className="text-muted-foreground/40 text-[10px] font-mono tracking-[0.4em] animate-pulse">CONNECT HARDWARE TO INITIATE SCAN</p>
                 </div>
               </div>
             )}
