@@ -51,6 +51,7 @@ export const VisionFeed: React.FC = () => {
   const isDetectingRef = useRef(false);
   const selectedObjectRef = useRef<cocoSsd.DetectedObject | null>(null);
   const selectedHistoryRef = useRef<[number, number, number, number][]>([]);
+  const trackingConfidenceRef = useRef<number>(0);
   
   // Zoom & Pan interpolation refs
   const zoomFactorRef = useRef(1);
@@ -115,6 +116,7 @@ export const VisionFeed: React.FC = () => {
     predictionsRef.current = [];
     selectedObjectRef.current = null;
     selectedHistoryRef.current = [];
+    trackingConfidenceRef.current = 0;
     setSelectedLabel(null);
     zoomFactorRef.current = 1;
     
@@ -203,11 +205,13 @@ export const VisionFeed: React.FC = () => {
       const clickedObj = candidates.sort((a, b) => (a.bbox[2] * a.bbox[3]) - (b.bbox[2] * b.bbox[3]))[0];
       selectedObjectRef.current = JSON.parse(JSON.stringify(clickedObj));
       selectedHistoryRef.current = []; // Reset history for new focus
+      trackingConfidenceRef.current = 1.0; // Perfect match on click
       setSelectedLabel(clickedObj.class);
       toast({ title: `Focus Locked: ${clickedObj.class}` });
     } else {
       selectedObjectRef.current = null;
       selectedHistoryRef.current = [];
+      trackingConfidenceRef.current = 0;
       setSelectedLabel(null);
     }
   };
@@ -249,8 +253,9 @@ export const VisionFeed: React.FC = () => {
                 if (iou > maxIoU) { maxIoU = iou; bestMatch = prediction; }
               }
             }
-            if (maxIoU > 0.4 && bestMatch) { 
+            if (maxIoU > 0.3 && bestMatch) { 
               selectedObjectRef.current = bestMatch;
+              trackingConfidenceRef.current = maxIoU;
               // Add to motion trail history
               selectedHistoryRef.current.push([...bestMatch.bbox]);
               if (selectedHistoryRef.current.length > 5) {
@@ -260,6 +265,7 @@ export const VisionFeed: React.FC = () => {
             else if (maxIoU < 0.1) { 
               selectedObjectRef.current = null; 
               selectedHistoryRef.current = [];
+              trackingConfidenceRef.current = 0;
               setSelectedLabel(null); 
             }
           }
@@ -337,7 +343,12 @@ export const VisionFeed: React.FC = () => {
         ctx.lineWidth = isSelected ? 4 : 2;
         ctx.strokeRect(x, y, width, height);
 
-        const labelText = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
+        let labelText = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
+        if (isSelected) {
+          const conf = Math.round(trackingConfidenceRef.current * 100);
+          labelText = `${prediction.class} (Tracking: ${conf}%)`;
+        }
+        
         ctx.font = `bold ${Math.max(14, canvas.width * 0.012)}px sans-serif`;
         const textWidth = ctx.measureText(labelText).width;
         ctx.fillStyle = labelBg;
@@ -364,7 +375,7 @@ export const VisionFeed: React.FC = () => {
             <div className="absolute top-6 right-6 animate-scale-in">
               <Badge variant="default" className="bg-green-600 hover:bg-green-700 gap-2 pl-3 py-1.5 pr-2 shadow-xl border-none">
                 Locked: {selectedLabel}
-                <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-white/20 p-0" onClick={() => { selectedObjectRef.current = null; selectedHistoryRef.current = []; setSelectedLabel(null); }}>
+                <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-white/20 p-0" onClick={() => { selectedObjectRef.current = null; selectedHistoryRef.current = []; trackingConfidenceRef.current = 0; setSelectedLabel(null); }}>
                   <XCircle className="w-4 h-4" />
                 </Button>
               </Badge>
