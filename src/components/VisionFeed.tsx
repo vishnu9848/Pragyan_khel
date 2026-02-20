@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, MousePointer2, XCircle, Moon, Sun, Upload, Video } from 'lucide-react';
+import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, MousePointer2, XCircle, Moon, Sun, Upload, Video, Maximize } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -37,6 +37,11 @@ const calculateIoU = (bbox1: [number, number, number, number], bbox2: [number, n
   return intersection_area / union_area;
 };
 
+// Helper for linear interpolation
+const lerp = (start: number, end: number, factor: number) => {
+  return start + (end - start) * factor;
+};
+
 export const VisionFeed: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -47,6 +52,11 @@ export const VisionFeed: React.FC = () => {
   const isDetectingRef = useRef(false);
   const selectedObjectRef = useRef<cocoSsd.DetectedObject | null>(null);
   
+  // Zoom & Pan interpolation refs
+  const zoomFactorRef = useRef(1);
+  const panXRef = useRef(0);
+  const panYRef = useRef(0);
+  
   const [isStreaming, setIsStreaming] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -54,6 +64,7 @@ export const VisionFeed: React.FC = () => {
   const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [isLowLight, setIsLowLight] = useState(false);
+  const [isAutoZoomEnabled, setIsAutoZoomEnabled] = useState(true);
   const [sourceMode, setSourceMode] = useState<'camera' | 'file'>('camera');
   const [videoFileUrl, setVideoFileUrl] = useState<string | null>(null);
   
@@ -98,6 +109,7 @@ export const VisionFeed: React.FC = () => {
     predictionsRef.current = [];
     selectedObjectRef.current = null;
     setSelectedLabel(null);
+    zoomFactorRef.current = 1;
     
     const canvas = canvasRef.current;
     if (canvas) {
@@ -163,8 +175,21 @@ export const VisionFeed: React.FC = () => {
     if (!isStreaming || !canvasRef.current) return;
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    
+    // Screen click coordinates
+    let x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    let y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    // If zoomed, we must reverse the transform to get original video coordinates
+    if (isAutoZoomEnabled) {
+      const zoom = zoomFactorRef.current;
+      const panX = panXRef.current;
+      const panY = panYRef.current;
+
+      // Reverse: Translate center back, Unscale, Translate pan back
+      x = (x - canvas.width / 2) / zoom + panX;
+      y = (y - canvas.height / 2) / zoom + panY;
+    }
 
     const candidates = predictionsRef.current.filter(prediction => {
       const [bboxX, bboxY, width, height] = prediction.bbox;
@@ -172,6 +197,7 @@ export const VisionFeed: React.FC = () => {
     });
 
     if (candidates.length > 0) {
+      // Pick the smallest box (most specific object)
       const clickedObj = candidates.sort((a, b) => (a.bbox[2] * a.bbox[3]) - (b.bbox[2] * b.bbox[3]))[0];
       selectedObjectRef.current = JSON.parse(JSON.stringify(clickedObj));
       setSelectedLabel(clickedObj.class);
@@ -200,8 +226,11 @@ export const VisionFeed: React.FC = () => {
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
+        panXRef.current = canvas.width / 2;
+        panYRef.current = canvas.height / 2;
       }
 
+      // Detection Loop (Throttled)
       if (frameCountRef.current % 10 === 0 && model && !isDetectingRef.current) {
         isDetectingRef.current = true;
         model.detect(video).then(predictions => {
@@ -224,27 +253,60 @@ export const VisionFeed: React.FC = () => {
       }
       frameCountRef.current++;
 
-      const enhancementFilter = isLowLight ? "contrast(1.2) brightness(1.1) " : "";
-      ctx.save();
-      ctx.filter = `${enhancementFilter}blur(12px) brightness(0.8)`;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      ctx.restore();
-
+      // Update Cinematic Zoom Targets
       const activeSelection = selectedObjectRef.current;
+      let targetZoom = 1.0;
+      let targetPanX = canvas.width / 2;
+      let targetPanY = canvas.height / 2;
+
+      if (activeSelection && isAutoZoomEnabled) {
+        const [x, y, w, h] = activeSelection.bbox;
+        targetZoom = 1.45; // 1.5x cinematic scale
+        targetPanX = x + w / 2;
+        targetPanY = y + h / 2;
+      }
+
+      // Interpolate for smooth motion
+      zoomFactorRef.current = lerp(zoomFactorRef.current, targetZoom, 0.08);
+      panXRef.current = lerp(panXRef.current, targetPanX, 0.08);
+      panYRef.current = lerp(panYRef.current, targetPanY, 0.08);
+
+      const zoom = zoomFactorRef.current;
+      const panX = panXRef.current;
+      const panY = panYRef.current;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Global Enhancement Filters
+      const enhancementFilter = isLowLight ? "contrast(1.2) brightness(1.1) " : "";
+
+      // 1. Draw Blurred Background (Transformed)
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.scale(zoom, zoom);
+      ctx.translate(-panX, -panY);
+      
+      ctx.filter = `${enhancementFilter}blur(12px) brightness(0.7)`;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      // 2. Clear focus area for active subject
       if (activeSelection) {
         const [x, y, width, height] = activeSelection.bbox;
         ctx.save();
-        ctx.filter = isLowLight ? "contrast(1.2) brightness(1.1)" : "none";
         ctx.beginPath();
         ctx.rect(x, y, width, height);
         ctx.clip();
+        
+        ctx.filter = isLowLight ? "contrast(1.2) brightness(1.1)" : "none";
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         ctx.restore();
       }
 
+      // 3. Draw UI Overlays (Boxes & Labels)
       predictionsRef.current.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
         const isSelected = activeSelection && prediction.class === activeSelection.class && calculateIoU(prediction.bbox, activeSelection.bbox) > 0.8;
+        
         const primaryColor = isSelected ? '#22c55e' : 'rgba(239, 68, 68, 0.4)';
         const labelBg = isSelected ? 'rgba(21, 128, 61, 0.9)' : 'rgba(185, 28, 28, 0.5)';
 
@@ -261,12 +323,14 @@ export const VisionFeed: React.FC = () => {
         ctx.fillText(labelText, x + 6, y - (canvas.width * 0.008));
       });
 
+      ctx.restore(); // Restore global transform
+
       animationFrameId = requestAnimationFrame(render);
     };
 
     if (isStreaming) animationFrameId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [isStreaming, model, isLowLight]);
+  }, [isStreaming, model, isLowLight, isAutoZoomEnabled]);
 
   return (
     <div className="w-full max-w-5xl mx-auto p-4 md:p-10 space-y-10 animate-fade-in">
@@ -299,12 +363,12 @@ export const VisionFeed: React.FC = () => {
             <div className="p-3 bg-primary/10 rounded-2xl">
               <Sparkles className="w-10 h-10 text-primary" />
             </div>
-            AI Smart Auto Focus & Dynamic Tracking
+            Vision Canvas: Cinematic AI Focus
           </CardTitle>
           <CardDescription className="text-lg max-w-2xl mx-auto mt-4 leading-relaxed">
-            Real-time object segmentation and tracking. Focus on any subject by clicking it in the stream.
+            Real-time object segmentation with **Cinematic Auto-Zoom**. Click any subject to lock focus and track smoothly.
             <div className="mt-2 text-sm font-medium text-muted-foreground bg-muted/30 py-2 rounded-lg px-4 border border-muted/50">
-              How it works: Detect → Match Overlap (IoU) → Selective Gaussian Blur Mask
+              Interpolated tracking ensures jitter-free camera motion and selective depth-of-field.
             </div>
           </CardDescription>
         </CardHeader>
@@ -358,12 +422,20 @@ export const VisionFeed: React.FC = () => {
             </div>
 
             <div className="flex flex-col gap-4 w-full lg:w-auto items-center lg:items-end">
-              <Label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mr-1">Controls</Label>
+              <Label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mr-1">Cinematic Controls</Label>
               <div className="flex flex-wrap items-center gap-4">
-                <div className="flex items-center space-x-4 bg-white px-5 py-3 rounded-2xl border border-muted shadow-sm">
+                <div className="flex items-center space-x-6 bg-white px-5 py-3 rounded-2xl border border-muted shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <Maximize className={cn("w-5 h-5", isAutoZoomEnabled ? "text-primary" : "text-muted-foreground")} />
+                    <Label htmlFor="auto-zoom" className="text-sm font-bold cursor-pointer">Auto-Zoom</Label>
+                  </div>
+                  <Switch id="auto-zoom" checked={isAutoZoomEnabled} onCheckedChange={setIsAutoZoomEnabled} disabled={!isStreaming} />
+                  
+                  <div className="w-px h-6 bg-muted mx-2" />
+
                   <div className="flex items-center gap-3">
                     {isLowLight ? <Moon className="w-5 h-5 text-indigo-600" /> : <Sun className="w-5 h-5 text-amber-500" />}
-                    <Label htmlFor="low-light" className="text-sm font-bold cursor-pointer">Low Light Mode</Label>
+                    <Label htmlFor="low-light" className="text-sm font-bold cursor-pointer">Low Light</Label>
                   </div>
                   <Switch id="low-light" checked={isLowLight} onCheckedChange={setIsLowLight} disabled={!isStreaming} />
                 </div>
@@ -403,9 +475,9 @@ export const VisionFeed: React.FC = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8 animate-fade-in delay-300">
         {[
-          { title: "Neural Processing", desc: "Detection uses COCO-SSD with MobileNetV2 for fast edge inference.", icon: <Cpu className="w-8 h-8 text-primary" /> },
+          { title: "Dynamic Auto-Zoom", desc: "AI calculates subject prominence and applies a 1.5x interpolated scale transition.", icon: <Maximize className="w-8 h-8 text-primary" /> },
           { title: "Spatial Stability", desc: "Intersection over Union (IoU) maintains object focus between inference cycles.", icon: <Box className="w-8 h-8 text-primary" /> },
-          { title: "Point of Interest", desc: "Click subjects to lock the AI focus engine and apply selective blur.", icon: <MousePointer2 className="w-8 h-8 text-primary" /> }
+          { title: "Selective Clarity", desc: "Gaussian blur masks isolate your subject from the background for depth of field.", icon: <MousePointer2 className="w-8 h-8 text-primary" /> }
         ].map((feature, i) => (
           <Card key={i} className="bg-white/70 border-none shadow-xl hover:shadow-2xl transition-all duration-300 rounded-2xl p-2 hover:-translate-y-1">
             <CardHeader className="pb-4">
