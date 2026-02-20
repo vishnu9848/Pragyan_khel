@@ -37,7 +37,6 @@ const calculateIoU = (bbox1: [number, number, number, number], bbox2: [number, n
   return intersection_area / union_area;
 };
 
-// Helper for linear interpolation
 const lerp = (start: number, end: number, factor: number) => {
   return start + (end - start) * factor;
 };
@@ -51,6 +50,7 @@ export const VisionFeed: React.FC = () => {
   const frameCountRef = useRef(0);
   const isDetectingRef = useRef(false);
   const selectedObjectRef = useRef<cocoSsd.DetectedObject | null>(null);
+  const selectedHistoryRef = useRef<[number, number, number, number][]>([]);
   
   // Zoom & Pan interpolation refs
   const zoomFactorRef = useRef(1);
@@ -114,6 +114,7 @@ export const VisionFeed: React.FC = () => {
     setIsStreaming(false);
     predictionsRef.current = [];
     selectedObjectRef.current = null;
+    selectedHistoryRef.current = [];
     setSelectedLabel(null);
     zoomFactorRef.current = 1;
     
@@ -182,17 +183,13 @@ export const VisionFeed: React.FC = () => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     
-    // Screen click coordinates
     let x = (e.clientX - rect.left) * (canvas.width / rect.width);
     let y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-    // If zoomed, we must reverse the transform to get original video coordinates
     if (isAutoZoomEnabled) {
       const zoom = zoomFactorRef.current;
       const panX = panXRef.current;
       const panY = panYRef.current;
-
-      // Reverse: Translate center back, Unscale, Translate pan back
       x = (x - canvas.width / 2) / zoom + panX;
       y = (y - canvas.height / 2) / zoom + panY;
     }
@@ -203,13 +200,14 @@ export const VisionFeed: React.FC = () => {
     });
 
     if (candidates.length > 0) {
-      // Pick the smallest box (most specific object)
       const clickedObj = candidates.sort((a, b) => (a.bbox[2] * a.bbox[3]) - (b.bbox[2] * b.bbox[3]))[0];
       selectedObjectRef.current = JSON.parse(JSON.stringify(clickedObj));
+      selectedHistoryRef.current = []; // Reset history for new focus
       setSelectedLabel(clickedObj.class);
       toast({ title: `Focus Locked: ${clickedObj.class}` });
     } else {
       selectedObjectRef.current = null;
+      selectedHistoryRef.current = [];
       setSelectedLabel(null);
     }
   };
@@ -251,15 +249,25 @@ export const VisionFeed: React.FC = () => {
                 if (iou > maxIoU) { maxIoU = iou; bestMatch = prediction; }
               }
             }
-            if (maxIoU > 0.4 && bestMatch) { selectedObjectRef.current = bestMatch; }
-            else if (maxIoU < 0.1) { selectedObjectRef.current = null; setSelectedLabel(null); }
+            if (maxIoU > 0.4 && bestMatch) { 
+              selectedObjectRef.current = bestMatch;
+              // Add to motion trail history
+              selectedHistoryRef.current.push([...bestMatch.bbox]);
+              if (selectedHistoryRef.current.length > 5) {
+                selectedHistoryRef.current.shift();
+              }
+            }
+            else if (maxIoU < 0.1) { 
+              selectedObjectRef.current = null; 
+              selectedHistoryRef.current = [];
+              setSelectedLabel(null); 
+            }
           }
           isDetectingRef.current = false;
         }).catch(() => { isDetectingRef.current = false; });
       }
       frameCountRef.current++;
 
-      // Update Cinematic Zoom Targets
       const activeSelection = selectedObjectRef.current;
       let targetZoom = 1.0;
       let targetPanX = canvas.width / 2;
@@ -267,12 +275,11 @@ export const VisionFeed: React.FC = () => {
 
       if (activeSelection && isAutoZoomEnabled) {
         const [x, y, w, h] = activeSelection.bbox;
-        targetZoom = 1.45; // 1.5x cinematic scale
+        targetZoom = 1.45;
         targetPanX = x + w / 2;
         targetPanY = y + h / 2;
       }
 
-      // Interpolate for smooth motion
       zoomFactorRef.current = lerp(zoomFactorRef.current, targetZoom, 0.08);
       panXRef.current = lerp(panXRef.current, targetPanX, 0.08);
       panYRef.current = lerp(panYRef.current, targetPanY, 0.08);
@@ -282,11 +289,8 @@ export const VisionFeed: React.FC = () => {
       const panY = panYRef.current;
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // Global Enhancement Filters
       const enhancementFilter = isLowLight ? "contrast(1.2) brightness(1.1) " : "";
 
-      // 1. Draw Blurred Background (Transformed)
       ctx.save();
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.scale(zoom, zoom);
@@ -295,23 +299,33 @@ export const VisionFeed: React.FC = () => {
       ctx.filter = `${enhancementFilter}blur(12px) brightness(0.7)`;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
-      // 2. Clear focus area for active subject
       if (activeSelection) {
         const [x, y, width, height] = activeSelection.bbox;
         ctx.save();
         ctx.beginPath();
         ctx.rect(x, y, width, height);
         ctx.clip();
-        
         ctx.filter = isLowLight ? "contrast(1.2) brightness(1.1)" : "none";
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         ctx.restore();
       }
 
-      // 3. Reset filter for UI Overlays (Boxes & Labels must be SHARP)
-      ctx.filter = isLowLight ? "contrast(1.2) brightness(1.1)" : "none";
+      // Reset filter for sharp overlays
+      ctx.filter = "none";
 
-      // 4. Draw UI Overlays (Boxes & Labels)
+      // Draw Motion Trails for selected subject
+      if (activeSelection && selectedHistoryRef.current.length > 1) {
+        selectedHistoryRef.current.forEach((trailBbox, index) => {
+          // Don't draw the current position as a trail
+          if (index === selectedHistoryRef.current.length - 1) return;
+          
+          const alpha = (index + 1) / selectedHistoryRef.current.length * 0.4;
+          ctx.strokeStyle = `rgba(34, 197, 94, ${alpha})`;
+          ctx.lineWidth = 2;
+          ctx.strokeRect(trailBbox[0], trailBbox[1], trailBbox[2], trailBbox[3]);
+        });
+      }
+
       predictionsRef.current.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
         const isSelected = activeSelection && prediction.class === activeSelection.class && calculateIoU(prediction.bbox, activeSelection.bbox) > 0.8;
@@ -332,8 +346,7 @@ export const VisionFeed: React.FC = () => {
         ctx.fillText(labelText, x + 6, y - (canvas.width * 0.008));
       });
 
-      ctx.restore(); // Restore global transform
-
+      ctx.restore();
       animationFrameId = requestAnimationFrame(render);
     };
 
@@ -351,7 +364,7 @@ export const VisionFeed: React.FC = () => {
             <div className="absolute top-6 right-6 animate-scale-in">
               <Badge variant="default" className="bg-green-600 hover:bg-green-700 gap-2 pl-3 py-1.5 pr-2 shadow-xl border-none">
                 Locked: {selectedLabel}
-                <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-white/20 p-0" onClick={() => { selectedObjectRef.current = null; setSelectedLabel(null); }}>
+                <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-white/20 p-0" onClick={() => { selectedObjectRef.current = null; selectedHistoryRef.current = []; setSelectedLabel(null); }}>
                   <XCircle className="w-4 h-4" />
                 </Button>
               </Badge>
@@ -377,7 +390,7 @@ export const VisionFeed: React.FC = () => {
             Vision Canvas: Cinematic AI Focus
           </CardTitle>
           <CardDescription className="text-lg max-w-2xl mx-auto mt-4 leading-relaxed">
-            Real-time object segmentation with **Cinematic Auto-Zoom**. Click any subject to lock focus and track smoothly.
+            Real-time object segmentation with **Cinematic Auto-Zoom** and **Motion Trails**. Click any subject to lock focus and track smoothly.
             <div className="mt-2 text-sm font-medium text-muted-foreground bg-muted/30 py-2 rounded-lg px-4 border border-muted/50">
               Interpolated tracking ensures jitter-free camera motion and selective depth-of-field.
             </div>
