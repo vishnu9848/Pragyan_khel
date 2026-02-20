@@ -146,14 +146,14 @@ export const VisionFeed: React.FC = () => {
       setSelectedObject(clickedObj);
       toast({
         title: `Selected: ${clickedObj.class}`,
-        description: `Tracking this object at ${Math.round(clickedObj.score * 100)}% confidence.`,
+        description: `Focusing on this object.`,
       });
     } else {
       setSelectedObject(null);
     }
   };
 
-  // Detection and Tracking Loop
+  // Detection and Tracking Loop (500ms intervals)
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
 
@@ -164,14 +164,12 @@ export const VisionFeed: React.FC = () => {
             const predictions = await model.detect(videoRef.current);
             predictionsRef.current = predictions;
             
-            // IoU-based Tracking Logic
+            // IoU-based Tracking Logic for selection
             if (selectedObject) {
               let bestMatch: cocoSsd.DetectedObject | null = null;
               let maxIoU = 0;
 
-              // Find the best overlapping match for the selected object
               for (const prediction of predictions) {
-                // We prefer matching objects of the same class for tracking stability
                 if (prediction.class === selectedObject.class) {
                   const iou = calculateIoU(prediction.bbox, selectedObject.bbox);
                   if (iou > maxIoU) {
@@ -181,15 +179,13 @@ export const VisionFeed: React.FC = () => {
                 }
               }
 
-              // Apply the tracking rules:
-              // 1. If we found a good match (IoU > 0.5), update the state to the new location
+              // Update track if overlap is significant
               if (maxIoU > 0.5 && bestMatch) {
                 setSelectedObject(bestMatch);
-              } 
-              // 2. If the match is very poor (IoU < 0.3), we've likely lost the track
-              // In this case, we don't clear selection automatically so the user can see where it was,
-              // but we stop updating the bounding box until a better match appears.
-              // Note: Detection continues normally via predictionsRef.current
+              } else if (maxIoU < 0.2) {
+                // We don't automatically clear to avoid flickering, 
+                // but the visual focus will stay on the last known location.
+              }
             }
           } catch (err) {
             console.error("Detection error:", err);
@@ -203,15 +199,7 @@ export const VisionFeed: React.FC = () => {
     };
   }, [isStreaming, model, selectedObject]);
 
-  useEffect(() => {
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [stream]);
-
-  // Visualization Effect
+  // Visualization Effect (Animation Frame Loop)
   useEffect(() => {
     let animationFrameId: number;
 
@@ -232,47 +220,66 @@ export const VisionFeed: React.FC = () => {
         canvas.height = video.videoHeight;
       }
 
+      // 1. Draw Blurred Background
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.filter = "blur(12px) brightness(0.8)";
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
 
+      // 2. Draw Sharp Focus Area (Selected Object)
+      if (selectedObject) {
+        const [x, y, width, height] = selectedObject.bbox;
+        ctx.save();
+        
+        // Create clipping region for the sharp area
+        ctx.beginPath();
+        ctx.rect(x, y, width, height);
+        ctx.clip();
+        
+        // Draw the video again (no filter means sharp)
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+      }
+
+      // 3. Draw Overlays (Bounding Boxes & Labels)
       const predictions = predictionsRef.current;
-      
       predictions.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
         const score = Math.round(prediction.score * 100);
         
-        // Use exact reference check for rendering selected state
+        // Check if this detection is the current focus
         const isSelected = selectedObject && 
           prediction.class === selectedObject.class && 
-          calculateIoU(prediction.bbox, selectedObject.bbox) > 0.95; // High overlap check for rendering
+          calculateIoU(prediction.bbox, selectedObject.bbox) > 0.9;
 
-        const primaryColor = isSelected ? '#22c55e' : '#ef4444';
-        const labelBg = isSelected ? 'rgba(21, 128, 61, 0.85)' : 'rgba(185, 28, 28, 0.85)';
+        const primaryColor = isSelected ? '#22c55e' : 'rgba(239, 68, 68, 0.4)';
+        const labelBg = isSelected ? 'rgba(21, 128, 61, 0.9)' : 'rgba(185, 28, 28, 0.5)';
 
         ctx.strokeStyle = primaryColor;
-        ctx.lineWidth = isSelected ? 5 : 2;
-
+        ctx.lineWidth = isSelected ? 4 : 1;
         ctx.strokeRect(x, y, width, height);
 
-        const labelText = `${prediction.class}${isSelected ? ' (TRACKING)' : ''} ${score}%`;
-        ctx.font = `bold ${Math.max(14, canvas.width * 0.015)}px sans-serif`;
+        const labelText = `${prediction.class} ${score}%`;
+        ctx.font = `bold ${Math.max(12, canvas.width * 0.012)}px sans-serif`;
         const textWidth = ctx.measureText(labelText).width;
         
         ctx.fillStyle = labelBg;
-        ctx.fillRect(x, y - (canvas.width * 0.03), textWidth + 10, canvas.width * 0.03);
+        ctx.fillRect(x, y - (canvas.width * 0.025), textWidth + 10, canvas.width * 0.025);
         
         ctx.fillStyle = 'white';
-        ctx.fillText(labelText, x + 5, y - (canvas.width * 0.008));
+        ctx.fillText(labelText, x + 5, y - (canvas.width * 0.007));
       });
 
-      // Frame HUD Overlay
-      ctx.strokeStyle = 'rgba(208, 188, 255, 0.3)';
+      // 4. Draw HUD Corners
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
       ctx.lineWidth = 2;
-      const margin = canvas.width * 0.04;
-      const corner = canvas.width * 0.08;
-      ctx.beginPath(); ctx.moveTo(margin, margin + corner); ctx.lineTo(margin, margin); ctx.lineTo(margin + corner, margin); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(canvas.width - margin - corner, margin); ctx.lineTo(canvas.width - margin, margin); ctx.lineTo(canvas.width - margin, margin + corner); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(canvas.width - margin, canvas.height - margin - corner); ctx.lineTo(canvas.width - margin, canvas.height - margin); ctx.lineTo(canvas.width - margin - corner, canvas.height - margin); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(margin + corner, canvas.height - margin); ctx.lineTo(margin, canvas.height - margin); ctx.lineTo(margin, canvas.height - margin - corner); ctx.stroke();
+      const m = canvas.width * 0.05;
+      const l = canvas.width * 0.08;
+      ctx.beginPath(); ctx.moveTo(m, m + l); ctx.lineTo(m, m); ctx.lineTo(m + l, m); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(canvas.width - m - l, m); ctx.lineTo(canvas.width - m, m); ctx.lineTo(canvas.width - m, m + l); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(canvas.width - m, canvas.height - m - l); ctx.lineTo(canvas.width - m, canvas.height - m); ctx.lineTo(canvas.width - m - l, canvas.height - m); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(m + l, canvas.height - m); ctx.lineTo(m, canvas.height - m); ctx.lineTo(m, canvas.height - m - l); ctx.stroke();
 
       animationFrameId = requestAnimationFrame(render);
     };
@@ -293,7 +300,7 @@ export const VisionFeed: React.FC = () => {
           {selectedObject && (
             <div className="absolute top-4 right-4 animate-scale-in">
               <Badge variant="default" className="bg-green-600 hover:bg-green-700 gap-2 pl-3 py-1 pr-1 shadow-lg">
-                Tracking: {selectedObject.class}
+                Focus: {selectedObject.class}
                 <Button 
                   variant="ghost" 
                   size="icon" 
@@ -312,7 +319,7 @@ export const VisionFeed: React.FC = () => {
               </Badge>
             ) : (
               <Badge variant="outline" className="text-primary border-primary/20 gap-1 bg-primary/5">
-                <Cpu className="w-3 h-3" /> Spatial Tracking Active
+                <Cpu className="w-3 h-3" /> Selective Focus Enabled
               </Badge>
             )}
           </div>
@@ -321,7 +328,7 @@ export const VisionFeed: React.FC = () => {
             Vision Stream
           </CardTitle>
           <CardDescription className="text-lg">
-            High-precision tracking using Intersection over Union (IoU) logic.
+            Selective background blur with real-time AI object tracking.
           </CardDescription>
         </CardHeader>
         
@@ -330,22 +337,20 @@ export const VisionFeed: React.FC = () => {
             "relative aspect-video bg-muted flex flex-col items-center justify-center overflow-hidden transition-all duration-500",
             !isStreaming && "bg-slate-100"
           )}>
+            {/* The video element is hidden but used as the source for drawing on the canvas */}
             <video
               ref={videoRef}
               autoPlay
               playsInline
               muted
-              className={cn(
-                "w-full h-full object-cover transition-opacity duration-700 absolute inset-0",
-                isStreaming ? "opacity-100" : "opacity-0"
-              )}
+              className="hidden"
             />
             
             <canvas
               ref={canvasRef}
               onClick={handleCanvasClick}
               className={cn(
-                "absolute inset-0 z-10 transition-opacity duration-700 w-full h-full object-contain cursor-crosshair",
+                "absolute inset-0 z-10 transition-opacity duration-700 w-full h-full object-cover cursor-crosshair",
                 isStreaming ? "opacity-100" : "opacity-0 pointer-events-none"
               )}
             />
@@ -408,9 +413,9 @@ export const VisionFeed: React.FC = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in delay-200">
         {[
-          { title: "Spatial Matching", desc: "Uses IoU (Intersection over Union) to match detections across frames.", icon: <MousePointer2 className="w-6 h-6 text-primary" /> },
-          { title: "Smart Feedback", desc: "Selected tracks turn green and use a thick stroke for focus.", icon: <Box className="w-6 h-6 text-primary" /> },
-          { title: "Temporal Stability", desc: "Tracking remains stable even if objects move quickly between frames.", icon: <Cpu className="w-6 h-6 text-primary" /> }
+          { title: "Selective Blur", desc: "Background and other objects are blurred while your selection remains sharp.", icon: <Sparkles className="w-6 h-6 text-primary" /> },
+          { title: "Smart Tracking", desc: "AI matching ensures focus follows your target smoothly across the frame.", icon: <Box className="w-6 h-6 text-primary" /> },
+          { title: "Interactive Focus", desc: "Click any detected object to instantly shift the vision focus.", icon: <MousePointer2 className="w-6 h-6 text-primary" /> }
         ].map((feature, i) => (
           <Card key={i} className="bg-white/60 border-none shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="pb-2">
