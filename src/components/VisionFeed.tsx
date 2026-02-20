@@ -74,7 +74,7 @@ export const VisionFeed: React.FC = () => {
   const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [isLowLight, setIsLowLight] = useState(false);
-  const [isAutoZoomEnabled, setIsAutoZoomEnabled] = useState(false); // Default to false
+  const [isAutoZoomEnabled, setIsAutoZoomEnabled] = useState(false); 
   const [isReacquiring, setIsReacquiring] = useState(false);
   const [sourceMode, setSourceMode] = useState<'camera' | 'file'>('camera');
   const [videoFileUrl, setVideoFileUrl] = useState<string | null>(null);
@@ -207,7 +207,7 @@ export const VisionFeed: React.FC = () => {
     let x = (e.clientX - rect.left) * (canvas.width / rect.width);
     let y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-    if (isAutoZoomEnabled) {
+    if (isAutoZoomEnabled && zoomFactorRef.current > 1.05) {
       const zoom = zoomFactorRef.current;
       const panX = panXRef.current;
       const panY = panYRef.current;
@@ -340,9 +340,8 @@ export const VisionFeed: React.FC = () => {
         focusAlphaRef.current = lerp(focusAlphaRef.current, 1.0, 0.1);
         focusScaleRef.current = lerp(focusScaleRef.current, 1.0, 0.1);
         
-        // Only zoom if the cinematic switch is toggled
         if (isAutoZoomEnabled) {
-          targetZoom = 1.45;
+          targetZoom = 1.8; // More aggressive zoom for cinematic feel
           targetPanX = focusBboxRef.current[0] + focusBboxRef.current[2] / 2;
           targetPanY = focusBboxRef.current[1] + focusBboxRef.current[3] / 2;
         }
@@ -362,22 +361,23 @@ export const VisionFeed: React.FC = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const enhancementFilter = isLowLight ? "contrast(1.2) brightness(1.1) " : "";
       
-      // Calculate dynamic blur based on focus state (Starts sharp at 0 selection)
       const blurAmount = focusAlphaRef.current * 16;
       const brightnessAmount = 1.0 - (focusAlphaRef.current * 0.4);
 
+      // Start transformation context
       ctx.save();
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.scale(zoom, zoom);
       ctx.translate(-panX, -panY);
       
-      // Draw background (Initially clear, blurs as selection stabilizes)
+      // Draw background with blur based on selection state
       ctx.filter = `${enhancementFilter}blur(${blurAmount}px) brightness(${brightnessAmount})`;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
-      // Clear filter for overlays
+      // Reset filter for overlays
       ctx.filter = "none";
 
+      // Draw sharp focus area if selection is active
       if (focusBboxRef.current && focusAlphaRef.current > 0.01) {
         const [x, y, w, h] = focusBboxRef.current;
         const scale = focusScaleRef.current;
@@ -395,8 +395,6 @@ export const VisionFeed: React.FC = () => {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         ctx.restore();
       }
-
-      ctx.filter = "none";
 
       // Draw trails
       if (activeSelection && !isReacquiring && selectedHistoryRef.current.length > 1) {
@@ -435,7 +433,7 @@ export const VisionFeed: React.FC = () => {
           ctx.fillRect(fx, fy - textHeight, textWidth + 14, textHeight);
           ctx.fillStyle = labelTextCol;
           ctx.fillText(labelText, fx + 7, fy - (textHeight * 0.35));
-        } else if (!activeSelection || !isSelected) {
+        } else if (!activeSelection) {
           ctx.strokeRect(x, y, width, height);
           if (frameCountRef.current % 30 < 15) {
             ctx.font = `700 ${Math.max(12, canvas.width * 0.012)}px 'Inter', sans-serif`;
