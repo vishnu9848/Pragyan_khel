@@ -54,10 +54,13 @@ export const VisionFeed: React.FC = () => {
   const trackingConfidenceRef = useRef<number>(0);
   const reacquisitionCountRef = useRef(0);
   
-  // Zoom & Pan interpolation refs
+  // Animation & Interpolation refs
   const zoomFactorRef = useRef(1);
   const panXRef = useRef(0);
   const panYRef = useRef(0);
+  const focusBboxRef = useRef<[number, number, number, number] | null>(null);
+  const focusAlphaRef = useRef(0);
+  const focusScaleRef = useRef(0.8);
   
   const [isStreaming, setIsStreaming] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -121,6 +124,9 @@ export const VisionFeed: React.FC = () => {
     setIsReacquiring(false);
     setSelectedLabel(null);
     zoomFactorRef.current = 1;
+    focusBboxRef.current = null;
+    focusAlphaRef.current = 0;
+    focusScaleRef.current = 0.8;
     
     const canvas = canvasRef.current;
     if (canvas) {
@@ -211,6 +217,7 @@ export const VisionFeed: React.FC = () => {
       reacquisitionCountRef.current = 0;
       setIsReacquiring(false);
       setSelectedLabel(clickedObj.class);
+      focusScaleRef.current = 0.6; // Initial "expansion" state
     } else {
       selectedObjectRef.current = null;
       selectedHistoryRef.current = [];
@@ -298,11 +305,26 @@ export const VisionFeed: React.FC = () => {
       let targetPanX = canvas.width / 2;
       let targetPanY = canvas.height / 2;
 
-      if (activeSelection && isAutoZoomEnabled && !isReacquiring) {
-        const [x, y, w, h] = activeSelection.bbox;
+      // Handle animated focus bbox
+      if (activeSelection && !isReacquiring) {
+        const [tx, ty, tw, th] = activeSelection.bbox;
+        if (!focusBboxRef.current) {
+          focusBboxRef.current = [...activeSelection.bbox];
+        } else {
+          focusBboxRef.current[0] = lerp(focusBboxRef.current[0], tx, 0.15);
+          focusBboxRef.current[1] = lerp(focusBboxRef.current[1], ty, 0.15);
+          focusBboxRef.current[2] = lerp(focusBboxRef.current[2], tw, 0.15);
+          focusBboxRef.current[3] = lerp(focusBboxRef.current[3], th, 0.15);
+        }
+        focusAlphaRef.current = lerp(focusAlphaRef.current, 1.0, 0.1);
+        focusScaleRef.current = lerp(focusScaleRef.current, 1.0, 0.1);
+        
         targetZoom = 1.45;
-        targetPanX = x + w / 2;
-        targetPanY = y + h / 2;
+        targetPanX = focusBboxRef.current[0] + focusBboxRef.current[2] / 2;
+        targetPanY = focusBboxRef.current[1] + focusBboxRef.current[3] / 2;
+      } else {
+        focusAlphaRef.current = lerp(focusAlphaRef.current, 0, 0.1);
+        focusScaleRef.current = lerp(focusScaleRef.current, 0.8, 0.1);
       }
 
       zoomFactorRef.current = lerp(zoomFactorRef.current, targetZoom, 0.08);
@@ -328,11 +350,18 @@ export const VisionFeed: React.FC = () => {
       // Clear filter for overlays
       ctx.filter = "none";
 
-      if (activeSelection && !isReacquiring) {
-        const [x, y, width, height] = activeSelection.bbox;
+      if (focusBboxRef.current && focusAlphaRef.current > 0.01) {
+        const [x, y, w, h] = focusBboxRef.current;
+        const scale = focusScaleRef.current;
+        const dw = w * scale;
+        const dh = h * scale;
+        const dx = x + (w - dw) / 2;
+        const dy = y + (h - dh) / 2;
+
         ctx.save();
+        ctx.globalAlpha = focusAlphaRef.current;
         ctx.beginPath();
-        ctx.rect(x, y, width, height);
+        ctx.rect(dx, dy, dw, dh);
         ctx.clip();
         ctx.filter = isLowLight ? "contrast(1.2) brightness(1.1)" : "none";
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -364,25 +393,34 @@ export const VisionFeed: React.FC = () => {
         ctx.strokeStyle = accentColor;
         ctx.lineWidth = isSelected ? 4 : 1;
         ctx.setLineDash(isSelected ? [] : [4, 4]);
-        ctx.strokeRect(x, y, width, height);
-        ctx.setLineDash([]);
-
-        if (isSelected || frameCountRef.current % 30 < 15) {
-          let labelText = `${prediction.class}`;
-          if (isSelected) {
-            const conf = Math.round(trackingConfidenceRef.current * 100);
-            labelText = `${prediction.class.toUpperCase()} • ${conf}%`;
-          }
+        
+        // Draw the visual bounding box (using interpolated coordinates for selected)
+        if (isSelected && focusBboxRef.current) {
+          const [fx, fy, fw, fh] = focusBboxRef.current;
+          ctx.strokeRect(fx, fy, fw, fh);
           
+          let labelText = `${prediction.class.toUpperCase()} • ${Math.round(trackingConfidenceRef.current * 100)}%`;
           ctx.font = `700 ${Math.max(12, canvas.width * 0.012)}px 'Inter', sans-serif`;
           const textWidth = ctx.measureText(labelText).width;
           const textHeight = canvas.width * 0.022;
           
           ctx.fillStyle = labelBg;
-          ctx.fillRect(x, y - textHeight, textWidth + 14, textHeight);
+          ctx.fillRect(fx, fy - textHeight, textWidth + 14, textHeight);
           ctx.fillStyle = labelTextCol;
-          ctx.fillText(labelText, x + 7, y - (textHeight * 0.35));
+          ctx.fillText(labelText, fx + 7, fy - (textHeight * 0.35));
+        } else if (!activeSelection || !isSelected) {
+          ctx.strokeRect(x, y, width, height);
+          if (frameCountRef.current % 30 < 15) {
+            ctx.font = `700 ${Math.max(12, canvas.width * 0.012)}px 'Inter', sans-serif`;
+            const textWidth = ctx.measureText(prediction.class).width;
+            const textHeight = canvas.width * 0.022;
+            ctx.fillStyle = labelBg;
+            ctx.fillRect(x, y - textHeight, textWidth + 14, textHeight);
+            ctx.fillStyle = labelTextCol;
+            ctx.fillText(prediction.class, x + 7, y - (textHeight * 0.35));
+          }
         }
+        ctx.setLineDash([]);
       });
 
       if (isReacquiring && activeSelection) {
