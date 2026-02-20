@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, MousePointer2, XCircle, Moon, Sun, Upload, Video, Maximize } from 'lucide-react';
+import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, MousePointer2, XCircle, Moon, Sun, Upload, Video, Maximize, Search } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -52,6 +52,7 @@ export const VisionFeed: React.FC = () => {
   const selectedObjectRef = useRef<cocoSsd.DetectedObject | null>(null);
   const selectedHistoryRef = useRef<[number, number, number, number][]>([]);
   const trackingConfidenceRef = useRef<number>(0);
+  const reacquisitionCountRef = useRef(0);
   
   // Zoom & Pan interpolation refs
   const zoomFactorRef = useRef(1);
@@ -66,6 +67,7 @@ export const VisionFeed: React.FC = () => {
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [isLowLight, setIsLowLight] = useState(false);
   const [isAutoZoomEnabled, setIsAutoZoomEnabled] = useState(true);
+  const [isReacquiring, setIsReacquiring] = useState(false);
   const [sourceMode, setSourceMode] = useState<'camera' | 'file'>('camera');
   const [videoFileUrl, setVideoFileUrl] = useState<string | null>(null);
   const [isMounted, setIsMounted] = useState(false);
@@ -117,6 +119,8 @@ export const VisionFeed: React.FC = () => {
     selectedObjectRef.current = null;
     selectedHistoryRef.current = [];
     trackingConfidenceRef.current = 0;
+    reacquisitionCountRef.current = 0;
+    setIsReacquiring(false);
     setSelectedLabel(null);
     zoomFactorRef.current = 1;
     
@@ -206,12 +210,16 @@ export const VisionFeed: React.FC = () => {
       selectedObjectRef.current = JSON.parse(JSON.stringify(clickedObj));
       selectedHistoryRef.current = []; // Reset history for new focus
       trackingConfidenceRef.current = 1.0; // Perfect match on click
+      reacquisitionCountRef.current = 0;
+      setIsReacquiring(false);
       setSelectedLabel(clickedObj.class);
       toast({ title: `Focus Locked: ${clickedObj.class}` });
     } else {
       selectedObjectRef.current = null;
       selectedHistoryRef.current = [];
       trackingConfidenceRef.current = 0;
+      reacquisitionCountRef.current = 0;
+      setIsReacquiring(false);
       setSelectedLabel(null);
     }
   };
@@ -239,34 +247,55 @@ export const VisionFeed: React.FC = () => {
       }
 
       // Detection Loop (Throttled)
-      if (frameCountRef.current % 10 === 0 && model && !isDetectingRef.current) {
+      // If reacquiring, run detection more aggressively (every 3 frames instead of 10)
+      const detectionFrequency = isReacquiring ? 3 : 10;
+      if (frameCountRef.current % detectionFrequency === 0 && model && !isDetectingRef.current) {
         isDetectingRef.current = true;
         model.detect(video).then(predictions => {
           predictionsRef.current = predictions;
           const currentSelected = selectedObjectRef.current;
+          
           if (currentSelected) {
             let bestMatch: cocoSsd.DetectedObject | null = null;
             let maxIoU = 0;
+            
             for (const prediction of predictions) {
               if (prediction.class === currentSelected.class) {
                 const iou = calculateIoU(prediction.bbox, currentSelected.bbox);
-                if (iou > maxIoU) { maxIoU = iou; bestMatch = prediction; }
+                if (iou > maxIoU) { 
+                  maxIoU = iou; 
+                  bestMatch = prediction; 
+                }
               }
             }
+            
+            // Smart reacquisition logic
             if (maxIoU > 0.3 && bestMatch) { 
               selectedObjectRef.current = bestMatch;
               trackingConfidenceRef.current = maxIoU;
+              reacquisitionCountRef.current = 0;
+              setIsReacquiring(false);
+              
               // Add to motion trail history
               selectedHistoryRef.current.push([...bestMatch.bbox]);
               if (selectedHistoryRef.current.length > 5) {
                 selectedHistoryRef.current.shift();
               }
-            }
-            else if (maxIoU < 0.1) { 
-              selectedObjectRef.current = null; 
-              selectedHistoryRef.current = [];
-              trackingConfidenceRef.current = 0;
-              setSelectedLabel(null); 
+            } else {
+              reacquisitionCountRef.current++;
+              // If IoU is low for 3 frames, flag reacquisition
+              if (reacquisitionCountRef.current >= 3) {
+                setIsReacquiring(true);
+                trackingConfidenceRef.current = 0;
+                
+                // If extremely lost (e.g., class not found at all), or after extended failure, we might reset
+                if (reacquisitionCountRef.current > 60) {
+                   selectedObjectRef.current = null;
+                   selectedHistoryRef.current = [];
+                   setIsReacquiring(false);
+                   setSelectedLabel(null);
+                }
+              }
             }
           }
           isDetectingRef.current = false;
@@ -279,7 +308,7 @@ export const VisionFeed: React.FC = () => {
       let targetPanX = canvas.width / 2;
       let targetPanY = canvas.height / 2;
 
-      if (activeSelection && isAutoZoomEnabled) {
+      if (activeSelection && isAutoZoomEnabled && !isReacquiring) {
         const [x, y, w, h] = activeSelection.bbox;
         targetZoom = 1.45;
         targetPanX = x + w / 2;
@@ -302,10 +331,11 @@ export const VisionFeed: React.FC = () => {
       ctx.scale(zoom, zoom);
       ctx.translate(-panX, -panY);
       
+      // Cinematic Background Blur
       ctx.filter = `${enhancementFilter}blur(12px) brightness(0.7)`;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
-      if (activeSelection) {
+      if (activeSelection && !isReacquiring) {
         const [x, y, width, height] = activeSelection.bbox;
         ctx.save();
         ctx.beginPath();
@@ -320,11 +350,9 @@ export const VisionFeed: React.FC = () => {
       ctx.filter = "none";
 
       // Draw Motion Trails for selected subject
-      if (activeSelection && selectedHistoryRef.current.length > 1) {
+      if (activeSelection && !isReacquiring && selectedHistoryRef.current.length > 1) {
         selectedHistoryRef.current.forEach((trailBbox, index) => {
-          // Don't draw the current position as a trail
           if (index === selectedHistoryRef.current.length - 1) return;
-          
           const alpha = (index + 1) / selectedHistoryRef.current.length * 0.4;
           ctx.strokeStyle = `rgba(34, 197, 94, ${alpha})`;
           ctx.lineWidth = 2;
@@ -332,6 +360,7 @@ export const VisionFeed: React.FC = () => {
         });
       }
 
+      // Render Detection Boxes
       predictionsRef.current.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
         const isSelected = activeSelection && prediction.class === activeSelection.class && calculateIoU(prediction.bbox, activeSelection.bbox) > 0.8;
@@ -357,13 +386,25 @@ export const VisionFeed: React.FC = () => {
         ctx.fillText(labelText, x + 6, y - (canvas.width * 0.008));
       });
 
+      // Show "Reacquiring target..." indicator on canvas
+      if (isReacquiring && activeSelection) {
+        const [x, y, w, h] = activeSelection.bbox;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(x, y + h / 2 - 20, w, 40);
+        ctx.fillStyle = '#facc15';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Reacquiring target...', x + w / 2, y + h / 2 + 5);
+        ctx.textAlign = 'start'; // reset
+      }
+
       ctx.restore();
       animationFrameId = requestAnimationFrame(render);
     };
 
     if (isStreaming) animationFrameId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [isStreaming, model, isLowLight, isAutoZoomEnabled]);
+  }, [isStreaming, model, isLowLight, isAutoZoomEnabled, isReacquiring]);
 
   if (!isMounted) return null;
 
@@ -372,10 +413,14 @@ export const VisionFeed: React.FC = () => {
       <Card className="overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.1)] border-none bg-white/90 backdrop-blur-md rounded-2xl">
         <CardHeader className="text-center pb-6 border-b border-muted/50 relative">
           {selectedLabel && (
-            <div className="absolute top-6 right-6 animate-scale-in">
-              <Badge variant="default" className="bg-green-600 hover:bg-green-700 gap-2 pl-3 py-1.5 pr-2 shadow-xl border-none">
-                Locked: {selectedLabel}
-                <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-white/20 p-0" onClick={() => { selectedObjectRef.current = null; selectedHistoryRef.current = []; trackingConfidenceRef.current = 0; setSelectedLabel(null); }}>
+            <div className="absolute top-6 right-6 animate-scale-in flex flex-col items-end gap-2">
+              <Badge variant="default" className={cn(
+                "gap-2 pl-3 py-1.5 pr-2 shadow-xl border-none transition-colors duration-500",
+                isReacquiring ? "bg-yellow-600 animate-pulse" : "bg-green-600 hover:bg-green-700"
+              )}>
+                {isReacquiring ? <Search className="w-4 h-4 animate-spin" /> : null}
+                {isReacquiring ? `Reacquiring: ${selectedLabel}` : `Locked: ${selectedLabel}`}
+                <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-white/20 p-0" onClick={() => { selectedObjectRef.current = null; selectedHistoryRef.current = []; trackingConfidenceRef.current = 0; reacquisitionCountRef.current = 0; setIsReacquiring(false); setSelectedLabel(null); }}>
                   <XCircle className="w-4 h-4" />
                 </Button>
               </Badge>
@@ -401,7 +446,7 @@ export const VisionFeed: React.FC = () => {
             Vision Canvas: Cinematic AI Focus
           </CardTitle>
           <CardDescription className="text-lg max-w-2xl mx-auto mt-4 leading-relaxed">
-            Real-time object segmentation with **Cinematic Auto-Zoom** and **Motion Trails**. Click any subject to lock focus and track smoothly.
+            Real-time object segmentation with **Cinematic Auto-Zoom**, **Motion Trails**, and **Smart Reacquisition**. Click any subject to lock focus and track smoothly.
             <div className="mt-2 text-sm font-medium text-muted-foreground bg-muted/30 py-2 rounded-lg px-4 border border-muted/50">
               Interpolated tracking ensures jitter-free camera motion and selective depth-of-field.
             </div>
@@ -510,8 +555,8 @@ export const VisionFeed: React.FC = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8 animate-fade-in delay-300">
         {[
-          { title: "Dynamic Auto-Zoom", desc: "AI calculates subject prominence and applies a 1.5x interpolated scale transition.", icon: <Maximize className="w-8 h-8 text-primary" /> },
-          { title: "Spatial Stability", desc: "Intersection over Union (IoU) maintains object focus between inference cycles.", icon: <Box className="w-8 h-8 text-primary" /> },
+          { title: "Smart Reacquisition", desc: "If tracking is lost, the AI enters an aggressive search mode to re-lock the subject.", icon: <Search className="w-8 h-8 text-primary" /> },
+          { title: "Cinematic Auto-Zoom", desc: "AI calculates subject prominence and applies a 1.5x interpolated scale transition.", icon: <Maximize className="w-8 h-8 text-primary" /> },
           { title: "Selective Clarity", desc: "Gaussian blur masks isolate your subject from the background for depth of field.", icon: <MousePointer2 className="w-8 h-8 text-primary" /> }
         ].map((feature, i) => (
           <Card key={i} className="bg-white/70 border-none shadow-xl hover:shadow-2xl transition-all duration-300 rounded-2xl p-2 hover:-translate-y-1">
