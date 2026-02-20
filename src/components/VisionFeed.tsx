@@ -67,9 +67,15 @@ export const VisionFeed: React.FC = () => {
   const [isAutoZoomEnabled, setIsAutoZoomEnabled] = useState(true);
   const [sourceMode, setSourceMode] = useState<'camera' | 'file'>('camera');
   const [videoFileUrl, setVideoFileUrl] = useState<string | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
   
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
   const { toast } = useToast();
+
+  // Fix hydration mismatch
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   useEffect(() => {
     const loadModel = async () => {
@@ -302,7 +308,10 @@ export const VisionFeed: React.FC = () => {
         ctx.restore();
       }
 
-      // 3. Draw UI Overlays (Boxes & Labels)
+      // 3. Reset filter for UI Overlays (Boxes & Labels must be SHARP)
+      ctx.filter = isLowLight ? "contrast(1.2) brightness(1.1)" : "none";
+
+      // 4. Draw UI Overlays (Boxes & Labels)
       predictionsRef.current.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
         const isSelected = activeSelection && prediction.class === activeSelection.class && calculateIoU(prediction.bbox, activeSelection.bbox) > 0.8;
@@ -331,6 +340,8 @@ export const VisionFeed: React.FC = () => {
     if (isStreaming) animationFrameId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animationFrameId);
   }, [isStreaming, model, isLowLight, isAutoZoomEnabled]);
+
+  if (!isMounted) return null;
 
   return (
     <div className="w-full max-w-5xl mx-auto p-4 md:p-10 space-y-10 animate-fade-in">
