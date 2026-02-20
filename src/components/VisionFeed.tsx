@@ -74,7 +74,7 @@ export const VisionFeed: React.FC = () => {
   const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [isLowLight, setIsLowLight] = useState(false);
-  const [isAutoZoomEnabled, setIsAutoZoomEnabled] = useState(true);
+  const [isAutoZoomEnabled, setIsAutoZoomEnabled] = useState(false); // Default to false
   const [isReacquiring, setIsReacquiring] = useState(false);
   const [sourceMode, setSourceMode] = useState<'camera' | 'file'>('camera');
   const [videoFileUrl, setVideoFileUrl] = useState<string | null>(null);
@@ -228,7 +228,7 @@ export const VisionFeed: React.FC = () => {
       reacquisitionCountRef.current = 0;
       setIsReacquiring(false);
       setSelectedLabel(clickedObj.class);
-      focusScaleRef.current = 0.6; // Initial "expansion" state
+      focusScaleRef.current = 0.6; 
     } else {
       selectedObjectRef.current = null;
       selectedHistoryRef.current = [];
@@ -261,7 +261,6 @@ export const VisionFeed: React.FC = () => {
         panYRef.current = canvas.height / 2;
       }
 
-      // Performance calculations
       const now = performance.now();
       frameCountSinceUpdateRef.current++;
       if (now - lastFpsUpdateRef.current >= 1000) {
@@ -328,7 +327,6 @@ export const VisionFeed: React.FC = () => {
       let targetPanX = canvas.width / 2;
       let targetPanY = canvas.height / 2;
 
-      // Handle animated focus bbox
       if (activeSelection && !isReacquiring) {
         const [tx, ty, tw, th] = activeSelection.bbox;
         if (!focusBboxRef.current) {
@@ -342,9 +340,12 @@ export const VisionFeed: React.FC = () => {
         focusAlphaRef.current = lerp(focusAlphaRef.current, 1.0, 0.1);
         focusScaleRef.current = lerp(focusScaleRef.current, 1.0, 0.1);
         
-        targetZoom = 1.45;
-        targetPanX = focusBboxRef.current[0] + focusBboxRef.current[2] / 2;
-        targetPanY = focusBboxRef.current[1] + focusBboxRef.current[3] / 2;
+        // Only zoom if the cinematic switch is toggled
+        if (isAutoZoomEnabled) {
+          targetZoom = 1.45;
+          targetPanX = focusBboxRef.current[0] + focusBboxRef.current[2] / 2;
+          targetPanY = focusBboxRef.current[1] + focusBboxRef.current[3] / 2;
+        }
       } else {
         focusAlphaRef.current = lerp(focusAlphaRef.current, 0, 0.1);
         focusScaleRef.current = lerp(focusScaleRef.current, 0.8, 0.1);
@@ -360,14 +361,18 @@ export const VisionFeed: React.FC = () => {
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const enhancementFilter = isLowLight ? "contrast(1.2) brightness(1.1) " : "";
+      
+      // Calculate dynamic blur based on focus state (Starts sharp at 0 selection)
+      const blurAmount = focusAlphaRef.current * 16;
+      const brightnessAmount = 1.0 - (focusAlphaRef.current * 0.4);
 
       ctx.save();
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.scale(zoom, zoom);
       ctx.translate(-panX, -panY);
       
-      // Draw blurred background
-      ctx.filter = `${enhancementFilter}blur(16px) brightness(0.6)`;
+      // Draw background (Initially clear, blurs as selection stabilizes)
+      ctx.filter = `${enhancementFilter}blur(${blurAmount}px) brightness(${brightnessAmount})`;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
       // Clear filter for overlays
@@ -417,7 +422,6 @@ export const VisionFeed: React.FC = () => {
         ctx.lineWidth = isSelected ? 4 : 1;
         ctx.setLineDash(isSelected ? [] : [4, 4]);
         
-        // Draw the visual bounding box (using interpolated coordinates for selected)
         if (isSelected && focusBboxRef.current) {
           const [fx, fy, fw, fh] = focusBboxRef.current;
           ctx.strokeRect(fx, fy, fw, fh);
@@ -549,7 +553,6 @@ export const VisionFeed: React.FC = () => {
               </div>
             )}
             
-            {/* Performance Overlay */}
             {isStreaming && (
               <div className="absolute bottom-4 left-4 z-30 flex gap-2">
                 <Badge variant="outline" className="bg-black/40 backdrop-blur-md border-white/10 text-[10px] font-mono py-1.5 px-3 rounded-full flex gap-2 items-center">
