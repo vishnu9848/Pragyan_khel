@@ -4,25 +4,25 @@
 
 @layer base {
   :root {
-    --background: 240 10% 3.9%;
+    --background: 230 20% 7%; /* Deep Midnight Slate */
     --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
+    --card: 230 20% 8%;
     --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
+    --popover: 230 20% 8%;
     --popover-foreground: 0 0% 98%;
-    --primary: 263.4 70% 50.4%; /* Vibrant Purple */
+    --primary: 230 85% 65%; /* Vibrant Indigo */
     --primary-foreground: 210 40% 98%;
-    --secondary: 240 3.7% 15.9%;
+    --secondary: 230 15% 15%;
     --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 142.1 70.6% 45.3%; /* Neon Green */
-    --accent-foreground: 144.9 80.4% 10%;
+    --muted: 230 15% 15%;
+    --muted-foreground: 230 10% 60%;
+    --accent: 170 85% 50%; /* Electric Teal */
+    --accent-foreground: 170 100% 5%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 263.4 70% 50.4%;
+    --border: 230 15% 15%;
+    --input: 230 15% 15%;
+    --ring: 230 85% 65%;
     --radius: 1.25rem;
   }
 }
@@ -38,10 +38,10 @@
 
 @layer utilities {
   .glass-panel {
-    @apply bg-black/40 backdrop-blur-xl border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.8)];
+    @apply bg-card/60 backdrop-blur-2xl border border-white/5 shadow-[0_8px_64px_-12px_rgba(0,0,0,0.5)];
   }
   .neon-glow {
-    @apply shadow-[0_0_15px_rgba(34,197,94,0.5)];
+    @apply shadow-[0_0_20px_rgba(20,255,200,0.4)];
   }
 }
 

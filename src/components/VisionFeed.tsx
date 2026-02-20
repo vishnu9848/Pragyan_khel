@@ -1,8 +1,8 @@
 "use client"
 
-import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, MousePointer2, XCircle, Moon, Sun, Upload, Video, Maximize, Search, Activity } from 'lucide-react';
+import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, XCircle, Moon, Sun, Upload, Video, Maximize, Activity } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -88,8 +88,8 @@ export const VisionFeed: React.FC = () => {
         setModel(loadedModel);
       } catch (err) {
         toast({
-          title: "AI Core Error",
-          description: "Failed to initialize detection engine.",
+          title: "Inference Engine Error",
+          description: "Could not initialize neural detection core.",
           variant: "destructive",
         });
       } finally {
@@ -148,8 +148,8 @@ export const VisionFeed: React.FC = () => {
     } catch (err) {
       setHasCameraPermission(false);
       toast({
-        title: "Access Denied",
-        description: "Please enable camera permissions.",
+        title: "Permission Required",
+        description: "Please allow camera access to start scanning.",
         variant: "destructive",
       });
     } finally {
@@ -173,8 +173,8 @@ export const VisionFeed: React.FC = () => {
       setIsStreaming(true);
     } catch (err) {
       toast({
-        title: "Import Error",
-        description: "Failed to load video file.",
+        title: "Load Failure",
+        description: "Unsupported video format or corrupted file.",
         variant: "destructive",
       });
     } finally {
@@ -321,9 +321,13 @@ export const VisionFeed: React.FC = () => {
       ctx.scale(zoom, zoom);
       ctx.translate(-panX, -panY);
       
-      ctx.filter = `${enhancementFilter}blur(16px) brightness(0.5)`;
+      // Draw blurred background
+      ctx.filter = `${enhancementFilter}blur(16px) brightness(0.6)`;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
+      // Clear filter for overlays
+      ctx.filter = "none";
+
       if (activeSelection && !isReacquiring) {
         const [x, y, width, height] = activeSelection.bbox;
         ctx.save();
@@ -337,26 +341,29 @@ export const VisionFeed: React.FC = () => {
 
       ctx.filter = "none";
 
+      // Draw trails
       if (activeSelection && !isReacquiring && selectedHistoryRef.current.length > 1) {
         selectedHistoryRef.current.forEach((trailBbox, index) => {
           if (index === selectedHistoryRef.current.length - 1) return;
-          const alpha = (index + 1) / selectedHistoryRef.current.length * 0.3;
-          ctx.strokeStyle = `rgba(34, 197, 94, ${alpha})`;
+          const alpha = (index + 1) / selectedHistoryRef.current.length * 0.4;
+          ctx.strokeStyle = `rgba(170, 255, 230, ${alpha})`;
           ctx.lineWidth = 1.5;
           ctx.strokeRect(trailBbox[0], trailBbox[1], trailBbox[2], trailBbox[3]);
         });
       }
 
+      // Draw detections
       predictionsRef.current.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
         const isSelected = activeSelection && prediction.class === activeSelection.class && calculateIoU(prediction.bbox, activeSelection.bbox) > 0.8;
         
-        const primaryColor = isSelected ? '#22c55e' : 'rgba(255, 255, 255, 0.2)';
-        const labelBg = isSelected ? 'rgba(34, 197, 94, 0.9)' : 'rgba(0, 0, 0, 0.5)';
+        const accentColor = isSelected ? '#14ffd2' : 'rgba(255, 255, 255, 0.2)';
+        const labelBg = isSelected ? 'rgba(20, 255, 210, 0.9)' : 'rgba(30, 40, 60, 0.7)';
+        const labelTextCol = isSelected ? '#001a14' : '#ffffff';
 
-        ctx.strokeStyle = primaryColor;
+        ctx.strokeStyle = accentColor;
         ctx.lineWidth = isSelected ? 4 : 1;
-        ctx.setLineDash(isSelected ? [] : [5, 5]);
+        ctx.setLineDash(isSelected ? [] : [4, 4]);
         ctx.strokeRect(x, y, width, height);
         ctx.setLineDash([]);
 
@@ -364,26 +371,28 @@ export const VisionFeed: React.FC = () => {
           let labelText = `${prediction.class}`;
           if (isSelected) {
             const conf = Math.round(trackingConfidenceRef.current * 100);
-            labelText = `${prediction.class} • ${conf}%`;
+            labelText = `${prediction.class.toUpperCase()} • ${conf}%`;
           }
           
-          ctx.font = `500 ${Math.max(12, canvas.width * 0.01)}px 'Inter', sans-serif`;
+          ctx.font = `700 ${Math.max(12, canvas.width * 0.012)}px 'Inter', sans-serif`;
           const textWidth = ctx.measureText(labelText).width;
+          const textHeight = canvas.width * 0.022;
+          
           ctx.fillStyle = labelBg;
-          ctx.fillRect(x, y - (canvas.width * 0.025), textWidth + 12, canvas.width * 0.025);
-          ctx.fillStyle = 'white';
-          ctx.fillText(labelText, x + 6, y - (canvas.width * 0.008));
+          ctx.fillRect(x, y - textHeight, textWidth + 14, textHeight);
+          ctx.fillStyle = labelTextCol;
+          ctx.fillText(labelText, x + 7, y - (textHeight * 0.35));
         }
       });
 
       if (isReacquiring && activeSelection) {
         const [x, y, w, h] = activeSelection.bbox;
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillStyle = 'rgba(20, 30, 50, 0.85)';
         ctx.fillRect(x, y + h / 2 - 20, w, 40);
-        ctx.fillStyle = '#22c55e';
-        ctx.font = "600 14px 'Inter', sans-serif";
+        ctx.fillStyle = '#14ffd2';
+        ctx.font = "800 12px 'Inter', sans-serif";
         ctx.textAlign = 'center';
-        ctx.fillText('REACQUIRING...', x + w / 2, y + h / 2 + 5);
+        ctx.fillText('REACQUIRING TARGET...', x + w / 2, y + h / 2 + 5);
         ctx.textAlign = 'start';
       }
 
@@ -398,60 +407,57 @@ export const VisionFeed: React.FC = () => {
   if (!isMounted) return null;
 
   return (
-    <div className="w-full space-y-8 animate-fade-in">
-      <Card className="glass-panel overflow-hidden border-none rounded-[2.5rem]">
-        <CardHeader className="text-center pb-8 border-b border-white/5 relative bg-gradient-to-b from-white/[0.02] to-transparent">
+    <div className="w-full space-y-10 animate-fade-in">
+      <Card className="glass-panel overflow-hidden border-none rounded-[3rem]">
+        <CardHeader className="text-center pb-10 border-b border-white/5 relative bg-gradient-to-b from-white/[0.03] to-transparent">
           {selectedLabel && (
-            <div className="absolute top-8 right-8 animate-scale-in flex flex-col items-end gap-3">
+            <div className="absolute top-10 right-10 animate-scale-in flex flex-col items-end gap-3 z-30">
               <Badge className={cn(
-                "gap-2 pl-4 py-2 pr-2 shadow-2xl border-none transition-all duration-500 rounded-full",
+                "gap-3 pl-5 py-3 pr-3 shadow-2xl border-none transition-all duration-500 rounded-full",
                 isReacquiring ? "bg-amber-500/20 text-amber-500 animate-pulse" : "bg-accent/20 text-accent neon-glow"
               )}>
-                {isReacquiring ? <Activity className="w-3 h-3" /> : <Box className="w-3 h-3" />}
-                <span className="text-[10px] font-black uppercase tracking-widest">
-                  {isReacquiring ? "Searching" : "Locked"}
+                {isReacquiring ? <Activity className="w-4 h-4" /> : <Box className="w-4 h-4" />}
+                <span className="text-[10px] font-black uppercase tracking-[0.2em]">
+                  {isReacquiring ? "Acquiring" : "Locked"}
                 </span>
-                <span className="font-bold text-sm px-1">{selectedLabel}</span>
+                <span className="font-bold text-base px-1 tracking-tight">{selectedLabel}</span>
                 <Button 
                   variant="ghost" 
                   size="icon" 
-                  className="h-6 w-6 rounded-full hover:bg-white/10 p-0 ml-1" 
+                  className="h-8 w-8 rounded-full hover:bg-white/10 p-0 ml-1" 
                   onClick={() => { selectedObjectRef.current = null; setSelectedLabel(null); }}
                 >
-                  <XCircle className="w-4 h-4 opacity-60" />
+                  <XCircle className="w-5 h-5 opacity-60" />
                 </Button>
               </Badge>
             </div>
           )}
           
-          <div className="flex justify-center mb-6">
+          <div className="flex justify-center mb-8">
             {isModelLoading ? (
-              <Badge variant="outline" className="animate-pulse border-white/10 bg-white/5 gap-2 px-6 py-2 rounded-full text-[10px] uppercase tracking-widest font-bold">
-                <RefreshCw className="w-3 h-3 animate-spin" /> Neural Sync Initializing
+              <Badge variant="outline" className="animate-pulse border-primary/20 bg-primary/5 gap-3 px-8 py-2.5 rounded-full text-[10px] uppercase tracking-[0.25em] font-black text-primary">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Initializing Neural Core
               </Badge>
             ) : (
-              <Badge variant="outline" className="text-accent border-accent/20 gap-2 px-6 py-2 bg-accent/5 rounded-full text-[10px] uppercase tracking-widest font-bold">
-                <Activity className="w-3 h-3" /> System Operational
+              <Badge variant="outline" className="text-accent border-accent/20 gap-3 px-8 py-2.5 bg-accent/5 rounded-full text-[10px] uppercase tracking-[0.25em] font-black">
+                <Cpu className="w-3.5 h-3.5" /> Neural Engine Active
               </Badge>
             )}
           </div>
           
-          <CardTitle className="text-4xl md:text-5xl font-black tracking-tighter text-white flex flex-col md:flex-row items-center justify-center gap-6">
-            <div className="p-4 bg-primary/20 rounded-3xl border border-primary/20 animate-float">
-              <Sparkles className="w-8 h-8 text-primary shadow-primary shadow-2xl" />
-            </div>
-            Vision Canvas
+          <CardTitle className="text-5xl md:text-7xl font-black tracking-tighter text-white flex flex-col items-center justify-center gap-6">
+            <span className="bg-clip-text text-transparent bg-gradient-to-r from-white via-white/80 to-white/60">Vision Canvas</span>
           </CardTitle>
-          <CardDescription className="text-muted-foreground/80 max-w-xl mx-auto mt-6 text-sm font-medium leading-relaxed">
-            Next-generation AI tracking with <span className="text-white">Cinematic Auto-Focus</span>. 
-            Click any object to lock neural focus and enable depth-of-field isolation.
+          <CardDescription className="text-muted-foreground/60 max-w-2xl mx-auto mt-8 text-base font-medium leading-relaxed tracking-wide">
+            Next-gen spatial intelligence with <span className="text-accent font-bold">Cinematic Auto-Focus</span>. 
+            Isolate targets with depth-of-field neural masks.
           </CardDescription>
         </CardHeader>
         
-        <CardContent className="p-0 relative bg-black/40">
+        <CardContent className="p-0 relative bg-background/20">
           <div className={cn(
             "relative aspect-video flex flex-col items-center justify-center overflow-hidden transition-all duration-1000",
-            !isStreaming && "opacity-80"
+            !isStreaming && "opacity-60"
           )}>
             <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none" />
             <canvas ref={canvasRef} onClick={handleCanvasClick} className={cn(
@@ -460,83 +466,84 @@ export const VisionFeed: React.FC = () => {
             )} />
 
             {!isStreaming && !isLoading && (
-              <div className="z-10 flex flex-col items-center gap-8 animate-scale-in text-center">
-                <div className="p-12 rounded-[3rem] bg-white/5 border border-white/10 backdrop-blur-3xl ring-1 ring-white/10">
-                  <Video className="w-16 h-16 text-white/20" />
+              <div className="z-10 flex flex-col items-center gap-10 animate-scale-in text-center">
+                <div className="p-16 rounded-[4rem] bg-white/[0.02] border border-white/5 backdrop-blur-3xl ring-1 ring-white/5 relative group">
+                  <div className="absolute inset-0 bg-primary/5 blur-3xl rounded-full scale-75 group-hover:scale-100 transition-transform duration-1000" />
+                  <Video className="w-20 h-20 text-white/10 relative z-10" />
                 </div>
-                <div className="space-y-3">
-                  <p className="text-xl font-black tracking-tight text-white uppercase italic">Awaiting Input</p>
-                  <p className="text-muted-foreground/60 text-xs font-mono tracking-widest">ESTABLISH FEED TO BEGIN ANALYSIS</p>
+                <div className="space-y-4">
+                  <p className="text-2xl font-black tracking-widest text-white/80 uppercase italic">Awaiting Interface</p>
+                  <p className="text-muted-foreground/40 text-[10px] font-mono tracking-[0.4em]">CONNECT HARDWARE TO INITIATE SCAN</p>
                 </div>
               </div>
             )}
 
             {isLoading && (
-              <div className="absolute inset-0 bg-black/80 z-20 flex flex-col items-center justify-center backdrop-blur-2xl">
+              <div className="absolute inset-0 bg-background/90 z-20 flex flex-col items-center justify-center backdrop-blur-2xl">
                 <div className="relative">
-                  <RefreshCw className="w-16 h-16 text-primary animate-spin mb-6" />
-                  <div className="absolute inset-0 bg-primary/20 blur-2xl" />
+                  <RefreshCw className="w-20 h-20 text-primary animate-spin mb-8" />
+                  <div className="absolute inset-0 bg-primary/30 blur-[60px]" />
                 </div>
-                <p className="font-black text-xs tracking-[0.3em] text-primary uppercase animate-pulse">Establishing Secure Stream</p>
+                <p className="font-black text-xs tracking-[0.4em] text-primary uppercase animate-pulse">Establishing Neural Link</p>
               </div>
             )}
           </div>
         </CardContent>
 
-        <CardFooter className="flex flex-col gap-10 p-10 bg-white/[0.02]">
-          <div className="flex flex-col lg:flex-row items-end justify-between w-full gap-8">
-            <div className="flex flex-col gap-5 w-full lg:w-auto">
-              <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Input Intelligence</Label>
-              <Tabs value={sourceMode} onValueChange={(val) => { stopStream(); setSourceMode(val as any); }} className="w-full sm:w-[320px]">
-                <TabsList className="grid w-full grid-cols-2 h-14 bg-black/40 border border-white/5 p-1 rounded-2xl">
-                  <TabsTrigger value="camera" className="rounded-xl gap-2 data-[state=active]:bg-primary data-[state=active]:text-white">
-                    <Camera className="w-4 h-4" /> Camera
+        <CardFooter className="flex flex-col gap-12 p-12 bg-white/[0.01]">
+          <div className="flex flex-col xl:flex-row items-end justify-between w-full gap-10">
+            <div className="flex flex-col gap-6 w-full xl:w-auto">
+              <Label className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground/40 ml-1">Stream Input Matrix</Label>
+              <Tabs value={sourceMode} onValueChange={(val) => { stopStream(); setSourceMode(val as any); }} className="w-full sm:w-[360px]">
+                <TabsList className="grid w-full grid-cols-2 h-16 bg-white/[0.03] border border-white/5 p-1.5 rounded-2xl">
+                  <TabsTrigger value="camera" className="rounded-xl gap-3 text-xs font-black uppercase tracking-widest data-[state=active]:bg-primary data-[state=active]:text-white transition-all">
+                    <Camera className="w-4 h-4" /> Live
                   </TabsTrigger>
-                  <TabsTrigger value="file" className="rounded-xl gap-2 data-[state=active]:bg-primary data-[state=active]:text-white">
-                    <Upload className="w-4 h-4" /> Files
+                  <TabsTrigger value="file" className="rounded-xl gap-3 text-xs font-black uppercase tracking-widest data-[state=active]:bg-primary data-[state=active]:text-white transition-all">
+                    <Upload className="w-4 h-4" /> Asset
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
             </div>
 
-            <div className="flex flex-wrap items-center gap-5 justify-center lg:justify-end w-full lg:w-auto">
-              <div className="flex items-center space-x-8 bg-black/40 px-6 py-4 rounded-2xl border border-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={cn("p-2 rounded-lg transition-colors", isAutoZoomEnabled ? "bg-accent/10 text-accent" : "bg-white/5 text-muted-foreground")}>
-                    <Maximize className="w-4 h-4" />
+            <div className="flex flex-wrap items-center gap-6 justify-center xl:justify-end w-full xl:w-auto">
+              <div className="flex items-center space-x-10 bg-white/[0.03] px-10 py-5 rounded-[2rem] border border-white/5">
+                <div className="flex items-center gap-5">
+                  <div className={cn("p-2.5 rounded-xl transition-all duration-500", isAutoZoomEnabled ? "bg-accent/15 text-accent shadow-[0_0_15px_rgba(20,255,210,0.2)]" : "bg-white/5 text-muted-foreground/40")}>
+                    <Maximize className="w-5 h-5" />
                   </div>
                   <div className="flex flex-col">
-                    <Label htmlFor="auto-zoom" className="text-[10px] font-black uppercase tracking-widest cursor-pointer">Auto-Zoom</Label>
+                    <Label htmlFor="auto-zoom" className="text-[10px] font-black uppercase tracking-[0.2em] cursor-pointer mb-1">Cinematic Zoom</Label>
+                    <Switch id="auto-zoom" checked={isAutoZoomEnabled} onCheckedChange={setIsAutoZoomEnabled} disabled={!isStreaming} className="data-[state=checked]:bg-accent" />
                   </div>
-                  <Switch id="auto-zoom" checked={isAutoZoomEnabled} onCheckedChange={setIsAutoZoomEnabled} disabled={!isStreaming} className="data-[state=checked]:bg-accent" />
                 </div>
                 
-                <div className="w-px h-8 bg-white/5" />
+                <div className="w-px h-10 bg-white/5" />
 
-                <div className="flex items-center gap-4">
-                  <div className={cn("p-2 rounded-lg transition-colors", isLowLight ? "bg-primary/10 text-primary" : "bg-white/5 text-muted-foreground")}>
-                    {isLowLight ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+                <div className="flex items-center gap-5">
+                  <div className={cn("p-2.5 rounded-xl transition-all duration-500", isLowLight ? "bg-primary/15 text-primary shadow-[0_0_15px_rgba(110,140,255,0.2)]" : "bg-white/5 text-muted-foreground/40")}>
+                    {isLowLight ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
                   </div>
                   <div className="flex flex-col">
-                    <Label htmlFor="low-light" className="text-[10px] font-black uppercase tracking-widest cursor-pointer">Enhanced</Label>
+                    <Label htmlFor="low-light" className="text-[10px] font-black uppercase tracking-[0.2em] cursor-pointer mb-1">Enhancement</Label>
+                    <Switch id="low-light" checked={isLowLight} onCheckedChange={setIsLowLight} disabled={!isStreaming} className="data-[state=checked]:bg-primary" />
                   </div>
-                  <Switch id="low-light" checked={isLowLight} onCheckedChange={setIsLowLight} disabled={!isStreaming} className="data-[state=checked]:bg-primary" />
                 </div>
               </div>
 
               {!isStreaming ? (
                 sourceMode === 'camera' ? (
-                  <Button onClick={startCamera} disabled={isLoading || isModelLoading} className="h-14 px-10 rounded-2xl text-sm font-black uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-95 bg-primary hover:bg-primary/90 shadow-2xl shadow-primary/20">
-                    <Camera className="mr-3 h-4 w-4" /> Initialize Feed
+                  <Button onClick={startCamera} disabled={isLoading || isModelLoading} className="h-16 px-12 rounded-[1.5rem] text-xs font-black uppercase tracking-[0.3em] transition-all hover:scale-[1.03] active:scale-95 bg-primary hover:bg-primary/80 shadow-2xl shadow-primary/20">
+                    <Camera className="mr-4 h-5 w-5" /> Initialize Feed
                   </Button>
                 ) : (
-                  <Button onClick={() => fileInputRef.current?.click()} disabled={isLoading || isModelLoading} className="h-14 px-10 rounded-2xl text-sm font-black uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-95 bg-primary hover:bg-primary/90 shadow-2xl shadow-primary/20">
-                    <Upload className="mr-3 h-4 w-4" /> Select Media
+                  <Button onClick={() => fileInputRef.current?.click()} disabled={isLoading || isModelLoading} className="h-16 px-12 rounded-[1.5rem] text-xs font-black uppercase tracking-[0.3em] transition-all hover:scale-[1.03] active:scale-95 bg-primary hover:bg-primary/80 shadow-2xl shadow-primary/20">
+                    <Upload className="mr-4 h-5 w-5" /> Select Resource
                   </Button>
                 )
               ) : (
-                <Button variant="destructive" onClick={stopStream} className="h-14 px-10 rounded-2xl text-sm font-black uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-95 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20">
-                  <CameraOff className="mr-3 h-4 w-4" /> Terminate Stream
+                <Button variant="destructive" onClick={stopStream} className="h-16 px-12 rounded-[1.5rem] text-xs font-black uppercase tracking-[0.3em] transition-all hover:scale-[1.03] active:scale-95 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20">
+                  <CameraOff className="mr-4 h-5 w-5" /> Kill Stream
                 </Button>
               )}
             </div>
@@ -545,31 +552,36 @@ export const VisionFeed: React.FC = () => {
           <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="video/mp4" className="hidden" />
 
           {hasCameraPermission === false && (
-            <Alert className="border-red-500/20 bg-red-500/5 text-red-500 rounded-2xl">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle className="font-black text-[10px] uppercase tracking-widest">Hardware Blocked</AlertTitle>
-              <AlertDescription className="text-xs opacity-80">
-                Camera access is required for real-time analysis. Please check system permissions.
+            <Alert className="border-red-500/20 bg-red-500/5 text-red-500 rounded-[2rem] p-6">
+              <AlertCircle className="h-5 w-5" />
+              <AlertTitle className="font-black text-[11px] uppercase tracking-[0.2em] mb-2">Hardware Access Denied</AlertTitle>
+              <AlertDescription className="text-sm opacity-70 font-medium">
+                Camera initialization failed. System security policies may be blocking hardware access.
               </AlertDescription>
             </Alert>
           )}
         </CardFooter>
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
         {[
-          { title: "Neural Tracking", desc: "Proprietary IoU algorithms maintain subject lock across dynamic frame shifts.", icon: <Activity className="w-5 h-5" /> },
-          { title: "Smart Zoom", desc: "Interpolated viewport scaling (1.5x) ensures jitter-free subject centering.", icon: <Maximize className="w-5 h-5" /> },
-          { title: "Bokeh Isolation", desc: "Real-time Gaussian masks provide selective focus on prioritized targets.", icon: <Sparkles className="w-5 h-5" /> }
+          { title: "Neural Lock", desc: "Proprietary IoU tracking maintains subject persistence across complex occlusion.", icon: <Activity className="w-6 h-6" /> },
+          { title: "Smart Optic", desc: "Interpolated viewport scaling ensures smooth, jitter-free subject centering.", icon: <Maximize className="w-6 h-6" /> },
+          { title: "Digital Bokeh", desc: "Real-time Gaussian isolation provides selective focus on prioritized targets.", icon: <Sparkles className="w-6 h-6" /> }
         ].map((feature, i) => (
-          <div key={i} className="glass-panel p-8 rounded-[2rem] space-y-4 hover:bg-white/[0.03] transition-colors group">
-            <div className="p-3 bg-primary/10 text-primary w-fit rounded-xl border border-primary/10 group-hover:scale-110 transition-transform">
+          <div key={i} className="glass-panel p-10 rounded-[2.5rem] space-y-6 hover:bg-white/[0.04] transition-all duration-500 group relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
+              <Cpu className="w-10 h-10 text-primary/10" />
+            </div>
+            <div className="p-4 bg-primary/10 text-primary w-fit rounded-[1.25rem] border border-primary/10 group-hover:scale-110 group-hover:bg-primary/20 transition-all duration-500">
               {feature.icon}
             </div>
-            <h3 className="text-sm font-black uppercase tracking-widest text-white">{feature.title}</h3>
-            <p className="text-xs text-muted-foreground/60 leading-relaxed font-medium">
-              {feature.desc}
-            </p>
+            <div className="space-y-3">
+              <h3 className="text-base font-black uppercase tracking-[0.2em] text-white/90">{feature.title}</h3>
+              <p className="text-sm text-muted-foreground/50 leading-relaxed font-medium">
+                {feature.desc}
+              </p>
+            </div>
           </div>
         ))}
       </div>
