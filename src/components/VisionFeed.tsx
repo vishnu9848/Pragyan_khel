@@ -2,20 +2,56 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
+import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+
+// TensorFlow imports
+import * as tf from '@tensorflow/tfjs';
+import * as cocoSsd from '@tensorflow-models/coco-ssd';
 
 export const VisionFeed: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const predictionsRef = useRef<cocoSsd.DetectedObject[]>([]);
+  
   const [isStreaming, setIsStreaming] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+  const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
+  const [isModelLoading, setIsModelLoading] = useState(true);
+  
   const { toast } = useToast();
+
+  // Load COCO-SSD model once on start
+  useEffect(() => {
+    const loadModel = async () => {
+      try {
+        setIsModelLoading(true);
+        // Ensure TF backend is ready
+        await tf.ready();
+        const loadedModel = await cocoSsd.load({
+          base: 'lite_mobilenet_v2' // Using lite version for better browser performance
+        });
+        setModel(loadedModel);
+        console.log("Model loaded successfully");
+      } catch (err) {
+        console.error("Error loading model:", err);
+        toast({
+          title: "AI Model Failed",
+          description: "Could not initialize object detection. Check your connection.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsModelLoading(false);
+      }
+    };
+    loadModel();
+  }, [toast]);
 
   const startCamera = async () => {
     setIsLoading(true);
@@ -58,6 +94,7 @@ export const VisionFeed: React.FC = () => {
       videoRef.current.srcObject = null;
     }
     setIsStreaming(false);
+    predictionsRef.current = [];
     
     // Clear canvas
     const canvas = canvasRef.current;
@@ -66,6 +103,28 @@ export const VisionFeed: React.FC = () => {
       ctx?.clearRect(0, 0, canvas.width, canvas.height);
     }
   }, [stream]);
+
+  // Handle detection loop (every 500ms)
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+
+    if (isStreaming && model && videoRef.current) {
+      intervalId = setInterval(async () => {
+        if (videoRef.current && videoRef.current.readyState === 4) {
+          try {
+            const predictions = await model.detect(videoRef.current);
+            predictionsRef.current = predictions;
+          } catch (err) {
+            console.error("Detection error:", err);
+          }
+        }
+      }, 500);
+    }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [isStreaming, model]);
 
   // Clean up on unmount
   useEffect(() => {
@@ -87,13 +146,11 @@ export const VisionFeed: React.FC = () => {
       const video = videoRef.current;
       const ctx = canvas.getContext('2d');
       
-      // Check if video metadata is loaded to get actual resolution
       if (!ctx || video.videoWidth === 0) {
         animationFrameId = requestAnimationFrame(render);
         return;
       }
 
-      // Match canvas size to actual video resolution for precision
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
@@ -101,48 +158,54 @@ export const VisionFeed: React.FC = () => {
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Add visualization overlay relative to resolution
+      // 1. Draw UI Frame Corners
       const time = Date.now() * 0.001;
-      ctx.strokeStyle = 'rgba(208, 188, 255, 0.6)'; // Soft Lavender
+      ctx.strokeStyle = 'rgba(208, 188, 255, 0.4)';
       ctx.lineWidth = Math.max(2, canvas.width * 0.005);
-      
       const cornerSize = canvas.width * 0.08;
       const margin = canvas.width * 0.04;
       
-      // Draw tracking corners
       // Top Left
-      ctx.beginPath();
-      ctx.moveTo(margin, margin + cornerSize);
-      ctx.lineTo(margin, margin);
-      ctx.lineTo(margin + cornerSize, margin);
-      ctx.stroke();
-
+      ctx.beginPath(); ctx.moveTo(margin, margin + cornerSize); ctx.lineTo(margin, margin); ctx.lineTo(margin + cornerSize, margin); ctx.stroke();
       // Top Right
-      ctx.beginPath();
-      ctx.moveTo(canvas.width - margin - cornerSize, margin);
-      ctx.lineTo(canvas.width - margin, margin);
-      ctx.lineTo(canvas.width - margin, margin + cornerSize);
-      ctx.stroke();
-
+      ctx.beginPath(); ctx.moveTo(canvas.width - margin - cornerSize, margin); ctx.lineTo(canvas.width - margin, margin); ctx.lineTo(canvas.width - margin, margin + cornerSize); ctx.stroke();
       // Bottom Right
-      ctx.beginPath();
-      ctx.moveTo(canvas.width - margin, canvas.height - margin - cornerSize);
-      ctx.lineTo(canvas.width - margin, canvas.height - margin);
-      ctx.lineTo(canvas.width - margin - cornerSize, canvas.height - margin);
-      ctx.stroke();
-
+      ctx.beginPath(); ctx.moveTo(canvas.width - margin, canvas.height - margin - cornerSize); ctx.lineTo(canvas.width - margin, canvas.height - margin); ctx.lineTo(canvas.width - margin - cornerSize, canvas.height - margin); ctx.stroke();
       // Bottom Left
-      ctx.beginPath();
-      ctx.moveTo(margin + cornerSize, canvas.height - margin);
-      ctx.lineTo(margin, canvas.height - margin);
-      ctx.lineTo(margin, canvas.height - margin - cornerSize);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(margin + cornerSize, canvas.height - margin); ctx.lineTo(margin, canvas.height - margin); ctx.lineTo(margin, canvas.height - margin - cornerSize); ctx.stroke();
 
-      // Pulsing central crosshair
-      const pulse = Math.sin(time * 5) * 12;
+      // 2. Draw Object Detections
+      const predictions = predictionsRef.current;
+      
+      predictions.forEach(prediction => {
+        const [x, y, width, height] = prediction.bbox;
+        const score = Math.round(prediction.score * 100);
+        
+        // Dynamic styling based on score
+        ctx.strokeStyle = '#D0BCFF'; // Lavender
+        ctx.fillStyle = '#D0BCFF';
+        ctx.lineWidth = 3;
+
+        // Bounding Box
+        ctx.strokeRect(x, y, width, height);
+
+        // Label Background
+        const labelText = `${prediction.class} (${score}%)`;
+        ctx.font = `bold ${Math.max(14, canvas.width * 0.015)}px sans-serif`;
+        const textWidth = ctx.measureText(labelText).width;
+        
+        ctx.fillStyle = 'rgba(103, 80, 164, 0.85)'; // Deep Purple
+        ctx.fillRect(x, y - (canvas.width * 0.03), textWidth + 10, canvas.width * 0.03);
+        
+        ctx.fillStyle = 'white';
+        ctx.fillText(labelText, x + 5, y - (canvas.width * 0.008));
+      });
+
+      // Pulsing central crosshair (smaller when objects found)
+      const pulse = Math.sin(time * 5) * (predictions.length > 0 ? 5 : 12);
       ctx.beginPath();
       ctx.arc(canvas.width / 2, canvas.height / 2, (canvas.width * 0.02) + pulse, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(103, 80, 164, 0.35)'; // Deep Purple
+      ctx.fillStyle = 'rgba(103, 80, 164, 0.2)';
       ctx.fill();
 
       animationFrameId = requestAnimationFrame(render);
@@ -161,12 +224,23 @@ export const VisionFeed: React.FC = () => {
     <div className="w-full max-w-4xl mx-auto p-4 md:p-8 space-y-8 animate-fade-in">
       <Card className="overflow-hidden shadow-2xl border-none bg-white/80 backdrop-blur-sm">
         <CardHeader className="text-center pb-4">
+          <div className="flex justify-center mb-2">
+            {isModelLoading ? (
+              <Badge variant="secondary" className="animate-pulse gap-1">
+                <RefreshCw className="w-3 h-3 animate-spin" /> Initializing AI...
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-primary border-primary/20 gap-1 bg-primary/5">
+                <Cpu className="w-3 h-3" /> Neural Engine Active
+              </Badge>
+            )}
+          </div>
           <CardTitle className="text-4xl font-headline font-bold text-primary flex items-center justify-center gap-3">
             <Sparkles className="w-8 h-8" />
             Vision Stream
           </CardTitle>
           <CardDescription className="text-lg">
-            Real-time visual processing with resolution-matched canvas overlays.
+            Real-time object detection powered by TensorFlow COCO-SSD.
           </CardDescription>
         </CardHeader>
         
@@ -175,7 +249,6 @@ export const VisionFeed: React.FC = () => {
             "relative aspect-video bg-muted flex flex-col items-center justify-center overflow-hidden transition-all duration-500",
             !isStreaming && "bg-slate-100"
           )}>
-            {/* Standard video tag always present to ensure stable MediaStream binding */}
             <video
               ref={videoRef}
               autoPlay
@@ -229,7 +302,7 @@ export const VisionFeed: React.FC = () => {
             <Button 
               size="lg" 
               onClick={startCamera} 
-              disabled={isLoading}
+              disabled={isLoading || isModelLoading}
               className="px-10 h-14 rounded-full text-lg font-semibold transition-all hover:scale-105 active:scale-95 shadow-lg shadow-primary/20"
             >
               {isLoading ? (
@@ -254,20 +327,20 @@ export const VisionFeed: React.FC = () => {
               "w-2.5 h-2.5 rounded-full",
               isStreaming ? "bg-green-500 animate-pulse" : "bg-slate-300"
             )} />
-            {isStreaming ? "Active" : "Ready"}
+            {isStreaming ? "Detection Active" : "Ready"}
           </div>
         </CardFooter>
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in delay-200">
         {[
-          { title: "Native Flow", desc: "Hardware-accelerated rendering for zero lag.", icon: "⚡" },
-          { title: "Smart Sync", desc: "Canvas resolution automatically tracks video density.", icon: "🎯" },
-          { title: "Secure Stream", desc: "Local processing ensures your feed stays private.", icon: "🛡️" }
+          { title: "Neural Flow", desc: "COCO-SSD model running locally in-browser.", icon: <Cpu className="w-6 h-6 text-primary" /> },
+          { title: "Smart Logic", desc: "Detection interval optimized at 2Hz for battery efficiency.", icon: <Box className="w-6 h-6 text-primary" /> },
+          { title: "Privacy First", desc: "Zero video data leaves your device. Local only.", icon: <Sparkles className="w-6 h-6 text-primary" /> }
         ].map((feature, i) => (
           <Card key={i} className="bg-white/60 border-none shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="pb-2">
-              <div className="text-2xl mb-2">{feature.icon}</div>
+              <div className="mb-2">{feature.icon}</div>
               <CardTitle className="text-lg font-headline">{feature.title}</CardTitle>
             </CardHeader>
             <CardContent>
