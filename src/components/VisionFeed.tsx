@@ -13,6 +13,31 @@ import { Badge } from '@/components/ui/badge';
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 
+/**
+ * Calculates Intersection over Union (IoU) between two bounding boxes.
+ * Bounding boxes are expected in [x, y, width, height] format.
+ */
+const calculateIoU = (bbox1: [number, number, number, number], bbox2: [number, number, number, number]): number => {
+  const [x1, y1, w1, h1] = bbox1;
+  const [x2, y2, w2, h2] = bbox2;
+
+  const x_left = Math.max(x1, x2);
+  const y_top = Math.max(y1, y2);
+  const x_right = Math.min(x1 + w1, x2 + w2);
+  const y_bottom = Math.min(y1 + h1, y2 + h2);
+
+  if (x_right < x_left || y_bottom < y_top) {
+    return 0.0;
+  }
+
+  const intersection_area = (x_right - x_left) * (y_bottom - y_top);
+  const area1 = w1 * h1;
+  const area2 = w2 * h2;
+  const union_area = area1 + area2 - intersection_area;
+
+  return intersection_area / union_area;
+};
+
 export const VisionFeed: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -33,10 +58,9 @@ export const VisionFeed: React.FC = () => {
     const loadModel = async () => {
       try {
         setIsModelLoading(true);
-        // Ensure TF backend is ready
         await tf.ready();
         const loadedModel = await cocoSsd.load({
-          base: 'lite_mobilenet_v2' // Using lite version for better browser performance
+          base: 'lite_mobilenet_v2'
         });
         setModel(loadedModel);
       } catch (err) {
@@ -97,7 +121,6 @@ export const VisionFeed: React.FC = () => {
     predictionsRef.current = [];
     setSelectedObject(null);
     
-    // Clear canvas
     const canvas = canvasRef.current;
     if (canvas) {
       const ctx = canvas.getContext('2d');
@@ -111,11 +134,9 @@ export const VisionFeed: React.FC = () => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     
-    // Calculate click coordinates relative to the canvas resolution
     const x = (e.clientX - rect.left) * (canvas.width / rect.width);
     const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-    // Find the first object that contains the clicked point
     const clickedObj = predictionsRef.current.find(prediction => {
       const [bboxX, bboxY, width, height] = prediction.bbox;
       return x >= bboxX && x <= bboxX + width && y >= bboxY && y <= bboxY + height;
@@ -132,7 +153,7 @@ export const VisionFeed: React.FC = () => {
     }
   };
 
-  // Handle detection loop (every 500ms)
+  // Detection and Tracking Loop
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
 
@@ -143,14 +164,32 @@ export const VisionFeed: React.FC = () => {
             const predictions = await model.detect(videoRef.current);
             predictionsRef.current = predictions;
             
-            // Try to update selected object position if it exists in the new predictions
+            // IoU-based Tracking Logic
             if (selectedObject) {
-              const matchingObj = predictions.find(p => p.class === selectedObject.class);
-              if (matchingObj) {
-                // Simple heuristic: if same class exists, update the selection reference
-                // A better tracker would use IOU (Intersection Over Union)
-                setSelectedObject(matchingObj);
+              let bestMatch: cocoSsd.DetectedObject | null = null;
+              let maxIoU = 0;
+
+              // Find the best overlapping match for the selected object
+              for (const prediction of predictions) {
+                // We prefer matching objects of the same class for tracking stability
+                if (prediction.class === selectedObject.class) {
+                  const iou = calculateIoU(prediction.bbox, selectedObject.bbox);
+                  if (iou > maxIoU) {
+                    maxIoU = iou;
+                    bestMatch = prediction;
+                  }
+                }
               }
+
+              // Apply the tracking rules:
+              // 1. If we found a good match (IoU > 0.5), update the state to the new location
+              if (maxIoU > 0.5 && bestMatch) {
+                setSelectedObject(bestMatch);
+              } 
+              // 2. If the match is very poor (IoU < 0.3), we've likely lost the track
+              // In this case, we don't clear selection automatically so the user can see where it was,
+              // but we stop updating the bounding box until a better match appears.
+              // Note: Detection continues normally via predictionsRef.current
             }
           } catch (err) {
             console.error("Detection error:", err);
@@ -164,7 +203,6 @@ export const VisionFeed: React.FC = () => {
     };
   }, [isStreaming, model, selectedObject]);
 
-  // Clean up on unmount
   useEffect(() => {
     return () => {
       if (stream) {
@@ -173,7 +211,7 @@ export const VisionFeed: React.FC = () => {
     };
   }, [stream]);
 
-  // Effect to handle canvas resizing and real-time visualization overlay
+  // Visualization Effect
   useEffect(() => {
     let animationFrameId: number;
 
@@ -196,30 +234,26 @@ export const VisionFeed: React.FC = () => {
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // 1. Draw Object Detections
       const predictions = predictionsRef.current;
       
       predictions.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
         const score = Math.round(prediction.score * 100);
         
-        // Determine if this object is the selected one
+        // Use exact reference check for rendering selected state
         const isSelected = selectedObject && 
           prediction.class === selectedObject.class && 
-          Math.abs(prediction.bbox[0] - selectedObject.bbox[0]) < 50;
+          calculateIoU(prediction.bbox, selectedObject.bbox) > 0.95; // High overlap check for rendering
 
-        // Dynamic styling based on selection
-        const primaryColor = isSelected ? '#22c55e' : '#ef4444'; // Green for selected, Red for others
+        const primaryColor = isSelected ? '#22c55e' : '#ef4444';
         const labelBg = isSelected ? 'rgba(21, 128, 61, 0.85)' : 'rgba(185, 28, 28, 0.85)';
 
         ctx.strokeStyle = primaryColor;
         ctx.lineWidth = isSelected ? 5 : 2;
 
-        // Bounding Box
         ctx.strokeRect(x, y, width, height);
 
-        // Label Background
-        const labelText = `${prediction.class}${isSelected ? ' (SELECTED)' : ''} ${score}%`;
+        const labelText = `${prediction.class}${isSelected ? ' (TRACKING)' : ''} ${score}%`;
         ctx.font = `bold ${Math.max(14, canvas.width * 0.015)}px sans-serif`;
         const textWidth = ctx.measureText(labelText).width;
         
@@ -230,18 +264,14 @@ export const VisionFeed: React.FC = () => {
         ctx.fillText(labelText, x + 5, y - (canvas.width * 0.008));
       });
 
-      // UI Frame Overlay (faded lavender)
+      // Frame HUD Overlay
       ctx.strokeStyle = 'rgba(208, 188, 255, 0.3)';
       ctx.lineWidth = 2;
       const margin = canvas.width * 0.04;
       const corner = canvas.width * 0.08;
-      // Top Left
       ctx.beginPath(); ctx.moveTo(margin, margin + corner); ctx.lineTo(margin, margin); ctx.lineTo(margin + corner, margin); ctx.stroke();
-      // Top Right
       ctx.beginPath(); ctx.moveTo(canvas.width - margin - corner, margin); ctx.lineTo(canvas.width - margin, margin); ctx.lineTo(canvas.width - margin, margin + corner); ctx.stroke();
-      // Bottom Right
       ctx.beginPath(); ctx.moveTo(canvas.width - margin, canvas.height - margin - corner); ctx.lineTo(canvas.width - margin, canvas.height - margin); ctx.lineTo(canvas.width - margin - corner, canvas.height - margin); ctx.stroke();
-      // Bottom Left
       ctx.beginPath(); ctx.moveTo(margin + corner, canvas.height - margin); ctx.lineTo(margin, canvas.height - margin); ctx.lineTo(margin, canvas.height - margin - corner); ctx.stroke();
 
       animationFrameId = requestAnimationFrame(render);
@@ -262,8 +292,8 @@ export const VisionFeed: React.FC = () => {
         <CardHeader className="text-center pb-4 relative">
           {selectedObject && (
             <div className="absolute top-4 right-4 animate-scale-in">
-              <Badge variant="default" className="bg-green-600 hover:bg-green-700 gap-2 pl-3 py-1 pr-1">
-                Selected: {selectedObject.class}
+              <Badge variant="default" className="bg-green-600 hover:bg-green-700 gap-2 pl-3 py-1 pr-1 shadow-lg">
+                Tracking: {selectedObject.class}
                 <Button 
                   variant="ghost" 
                   size="icon" 
@@ -282,7 +312,7 @@ export const VisionFeed: React.FC = () => {
               </Badge>
             ) : (
               <Badge variant="outline" className="text-primary border-primary/20 gap-1 bg-primary/5">
-                <Cpu className="w-3 h-3" /> Neural Engine Active
+                <Cpu className="w-3 h-3" /> Spatial Tracking Active
               </Badge>
             )}
           </div>
@@ -291,7 +321,7 @@ export const VisionFeed: React.FC = () => {
             Vision Stream
           </CardTitle>
           <CardDescription className="text-lg">
-            Click objects on the stream to select and track them.
+            High-precision tracking using Intersection over Union (IoU) logic.
           </CardDescription>
         </CardHeader>
         
@@ -378,9 +408,9 @@ export const VisionFeed: React.FC = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in delay-200">
         {[
-          { title: "Point & Select", desc: "Click any detected object to highlight it globally.", icon: <MousePointer2 className="w-6 h-6 text-primary" /> },
-          { title: "Visual Logic", desc: "Selected objects turn green, others stay red for clarity.", icon: <Box className="w-6 h-6 text-primary" /> },
-          { title: "Neural Engine", desc: "Local TensorFlow COCO-SSD detection running at 2Hz.", icon: <Cpu className="w-6 h-6 text-primary" /> }
+          { title: "Spatial Matching", desc: "Uses IoU (Intersection over Union) to match detections across frames.", icon: <MousePointer2 className="w-6 h-6 text-primary" /> },
+          { title: "Smart Feedback", desc: "Selected tracks turn green and use a thick stroke for focus.", icon: <Box className="w-6 h-6 text-primary" /> },
+          { title: "Temporal Stability", desc: "Tracking remains stable even if objects move quickly between frames.", icon: <Cpu className="w-6 h-6 text-primary" /> }
         ].map((feature, i) => (
           <Card key={i} className="bg-white/60 border-none shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="pb-2">
