@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, MousePointer2, XCircle, Moon, Sun } from 'lucide-react';
+import { Camera, CameraOff, Sparkles, RefreshCw, AlertCircle, Box, Cpu, MousePointer2, XCircle, Moon, Sun, Upload, Video } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -10,15 +10,12 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 // TensorFlow imports
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 
-/**
- * Calculates Intersection over Union (IoU) between two bounding boxes.
- * Bounding boxes are expected in [x, y, width, height] format.
- */
 const calculateIoU = (bbox1: [number, number, number, number], bbox2: [number, number, number, number]): number => {
   const [x1, y1, w1, h1] = bbox1;
   const [x2, y2, w2, h2] = bbox2;
@@ -43,8 +40,8 @@ const calculateIoU = (bbox1: [number, number, number, number], bbox2: [number, n
 export const VisionFeed: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
-  // Refs for tracking and detection state without triggering re-renders
   const predictionsRef = useRef<cocoSsd.DetectedObject[]>([]);
   const frameCountRef = useRef(0);
   const isDetectingRef = useRef(false);
@@ -57,21 +54,18 @@ export const VisionFeed: React.FC = () => {
   const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [isLowLight, setIsLowLight] = useState(false);
+  const [sourceMode, setSourceMode] = useState<'camera' | 'file'>('camera');
+  const [videoFileUrl, setVideoFileUrl] = useState<string | null>(null);
   
-  // Keep a state version for UI labels, synchronized with ref
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
-  
   const { toast } = useToast();
 
-  // Load COCO-SSD model once on start
   useEffect(() => {
     const loadModel = async () => {
       try {
         setIsModelLoading(true);
         await tf.ready();
-        const loadedModel = await cocoSsd.load({
-          base: 'lite_mobilenet_v2'
-        });
+        const loadedModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         setModel(loadedModel);
       } catch (err) {
         console.error("Error loading model:", err);
@@ -87,46 +81,18 @@ export const VisionFeed: React.FC = () => {
     loadModel();
   }, [toast]);
 
-  const startCamera = async () => {
-    setIsLoading(true);
-    setHasCameraPermission(null);
-    try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: 'user',
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false,
-      });
-      
-      setStream(mediaStream);
-      setHasCameraPermission(true);
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-        await videoRef.current.play();
-      }
-      setIsStreaming(true);
-    } catch (err) {
-      console.error("Error accessing camera:", err);
-      setHasCameraPermission(false);
-      toast({
-        title: "Camera Access Failed",
-        description: "Please enable camera permissions in your browser settings.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const stopCamera = useCallback(() => {
+  const stopStream = useCallback(() => {
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
       setStream(null);
     }
+    if (videoFileUrl) {
+      URL.revokeObjectURL(videoFileUrl);
+      setVideoFileUrl(null);
+    }
     if (videoRef.current) {
       videoRef.current.srcObject = null;
+      videoRef.current.src = "";
     }
     setIsStreaming(false);
     predictionsRef.current = [];
@@ -138,122 +104,132 @@ export const VisionFeed: React.FC = () => {
       const ctx = canvas.getContext('2d');
       ctx?.clearRect(0, 0, canvas.width, canvas.height);
     }
-  }, [stream]);
+  }, [stream, videoFileUrl]);
+
+  const startCamera = async () => {
+    setIsLoading(true);
+    setHasCameraPermission(null);
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      
+      setStream(mediaStream);
+      setHasCameraPermission(true);
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream;
+        await videoRef.current.play();
+      }
+      setIsStreaming(true);
+    } catch (err) {
+      setHasCameraPermission(false);
+      toast({
+        title: "Camera Access Failed",
+        description: "Please check your browser's camera permissions.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsLoading(true);
+    try {
+      const url = URL.createObjectURL(file);
+      setVideoFileUrl(url);
+      if (videoRef.current) {
+        videoRef.current.src = url;
+        videoRef.current.loop = true;
+        await videoRef.current.play();
+      }
+      setIsStreaming(true);
+    } catch (err) {
+      toast({
+        title: "Video Loading Failed",
+        description: "Could not load the selected video file.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isStreaming || !canvasRef.current) return;
-
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    
-    // Convert click coordinates to canvas internal resolution
     const x = (e.clientX - rect.left) * (canvas.width / rect.width);
     const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-    // Find all objects containing the click point
     const candidates = predictionsRef.current.filter(prediction => {
       const [bboxX, bboxY, width, height] = prediction.bbox;
       return x >= bboxX && x <= bboxX + width && y >= bboxY && y <= bboxY + height;
     });
 
     if (candidates.length > 0) {
-      // Pick the smallest box if multiple overlap (most precise target)
       const clickedObj = candidates.sort((a, b) => (a.bbox[2] * a.bbox[3]) - (b.bbox[2] * b.bbox[3]))[0];
-      
-      // Update ref immediately to reset tracking logic to the new object
-      // Clone the object to prevent reference updates from standard detection cycles affecting the switch logic
       selectedObjectRef.current = JSON.parse(JSON.stringify(clickedObj));
       setSelectedLabel(clickedObj.class);
-      
-      toast({
-        title: `Focus Locked: ${clickedObj.class}`,
-        description: `Tracking target with ${Math.round(clickedObj.score * 100)}% confidence.`,
-      });
+      toast({ title: `Focus Locked: ${clickedObj.class}` });
     } else {
       selectedObjectRef.current = null;
       setSelectedLabel(null);
     }
   };
 
-  // Unified Visualization and Detection Effect
   useEffect(() => {
     let animationFrameId: number;
-
     const render = () => {
       if (!isStreaming || !canvasRef.current || !videoRef.current) {
         if (isStreaming) animationFrameId = requestAnimationFrame(render);
         return;
       }
-      
       const canvas = canvasRef.current;
       const video = videoRef.current;
       const ctx = canvas.getContext('2d', { alpha: false });
-      
       if (!ctx || video.readyState < 2 || video.videoWidth === 0) {
         animationFrameId = requestAnimationFrame(render);
         return;
       }
 
-      // Sync canvas resolution
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
       }
 
-      // 1. Detection Throttling (Every 10 frames)
       if (frameCountRef.current % 10 === 0 && model && !isDetectingRef.current) {
         isDetectingRef.current = true;
-        
-        // Inference runs on the raw video stream
         model.detect(video).then(predictions => {
           predictionsRef.current = predictions;
-          
-          // IoU Tracking Update
           const currentSelected = selectedObjectRef.current;
           if (currentSelected) {
             let bestMatch: cocoSsd.DetectedObject | null = null;
             let maxIoU = 0;
-
             for (const prediction of predictions) {
               if (prediction.class === currentSelected.class) {
                 const iou = calculateIoU(prediction.bbox, currentSelected.bbox);
-                if (iou > maxIoU) {
-                  maxIoU = iou;
-                  bestMatch = prediction;
-                }
+                if (iou > maxIoU) { maxIoU = iou; bestMatch = prediction; }
               }
             }
-
-            // Update focus if match is found, or clear if object is completely lost
-            if (maxIoU > 0.4 && bestMatch) {
-              selectedObjectRef.current = bestMatch;
-            } else if (maxIoU < 0.1) {
-              // Only clear automatically if it's truly gone to avoid flicker
-              selectedObjectRef.current = null;
-              setSelectedLabel(null);
-            }
+            if (maxIoU > 0.4 && bestMatch) { selectedObjectRef.current = bestMatch; }
+            else if (maxIoU < 0.1) { selectedObjectRef.current = null; setSelectedLabel(null); }
           }
-          
           isDetectingRef.current = false;
-        }).catch(err => {
-          console.error("AI Detection error:", err);
-          isDetectingRef.current = false;
-        });
+        }).catch(() => { isDetectingRef.current = false; });
       }
       frameCountRef.current++;
 
-      // Enhancement filter setup
       const enhancementFilter = isLowLight ? "contrast(1.2) brightness(1.1) " : "";
-
-      // 2. Draw Blurred Background
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
-      // Combine background blur with optional low-light enhancement
       ctx.filter = `${enhancementFilter}blur(12px) brightness(0.8)`;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       ctx.restore();
 
-      // 3. Draw Sharp Focus Area
       const activeSelection = selectedObjectRef.current;
       if (activeSelection) {
         const [x, y, width, height] = activeSelection.bbox;
@@ -266,17 +242,9 @@ export const VisionFeed: React.FC = () => {
         ctx.restore();
       }
 
-      // 4. Draw Overlays
-      const predictions = predictionsRef.current;
-      predictions.forEach(prediction => {
+      predictionsRef.current.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
-        const score = Math.round(prediction.score * 100);
-        
-        // Check if this box is the current selected object
-        const isSelected = activeSelection && 
-          prediction.class === activeSelection.class && 
-          calculateIoU(prediction.bbox, activeSelection.bbox) > 0.8;
-
+        const isSelected = activeSelection && prediction.class === activeSelection.class && calculateIoU(prediction.bbox, activeSelection.bbox) > 0.8;
         const primaryColor = isSelected ? '#22c55e' : 'rgba(239, 68, 68, 0.4)';
         const labelBg = isSelected ? 'rgba(21, 128, 61, 0.9)' : 'rgba(185, 28, 28, 0.5)';
 
@@ -284,198 +252,168 @@ export const VisionFeed: React.FC = () => {
         ctx.lineWidth = isSelected ? 4 : 2;
         ctx.strokeRect(x, y, width, height);
 
-        const labelText = `${prediction.class} ${score}%`;
+        const labelText = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
         ctx.font = `bold ${Math.max(14, canvas.width * 0.012)}px sans-serif`;
         const textWidth = ctx.measureText(labelText).width;
-        
         ctx.fillStyle = labelBg;
         ctx.fillRect(x, y - (canvas.width * 0.03), textWidth + 12, canvas.width * 0.03);
-        
         ctx.fillStyle = 'white';
         ctx.fillText(labelText, x + 6, y - (canvas.width * 0.008));
       });
 
-      // 5. Draw HUD Corners
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-      ctx.lineWidth = 2;
-      const m = canvas.width * 0.05;
-      const l = canvas.width * 0.08;
-      ctx.beginPath(); ctx.moveTo(m, m + l); ctx.lineTo(m, m); ctx.lineTo(m + l, m); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(canvas.width - m - l, m); ctx.lineTo(canvas.width - m, m); ctx.lineTo(canvas.width - m, m + l); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(canvas.width - m, canvas.height - m - l); ctx.lineTo(canvas.width - m, canvas.height - m); ctx.lineTo(canvas.width - m - l, canvas.height - m); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(m + l, canvas.height - m); ctx.lineTo(m, canvas.height - m); ctx.lineTo(m, canvas.height - m - l); ctx.stroke();
-
       animationFrameId = requestAnimationFrame(render);
     };
 
-    if (isStreaming) {
-      animationFrameId = requestAnimationFrame(render);
-    }
-
-    return () => {
-      cancelAnimationFrame(animationFrameId);
-    };
+    if (isStreaming) animationFrameId = requestAnimationFrame(render);
+    return () => cancelAnimationFrame(animationFrameId);
   }, [isStreaming, model, isLowLight]);
 
   return (
-    <div className="w-full max-w-4xl mx-auto p-4 md:p-8 space-y-8 animate-fade-in">
-      <Card className="overflow-hidden shadow-2xl border-none bg-white/80 backdrop-blur-sm">
-        <CardHeader className="text-center pb-4 relative">
+    <div className="w-full max-w-5xl mx-auto p-4 md:p-10 space-y-10 animate-fade-in">
+      <Card className="overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.1)] border-none bg-white/90 backdrop-blur-md rounded-2xl">
+        <CardHeader className="text-center pb-6 border-b border-muted/50 relative">
           {selectedLabel && (
-            <div className="absolute top-4 right-4 animate-scale-in">
-              <Badge variant="default" className="bg-green-600 hover:bg-green-700 gap-2 pl-3 py-1 pr-1 shadow-lg">
-                Focus: {selectedLabel}
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className="h-5 w-5 rounded-full hover:bg-green-500/50 p-0"
-                  onClick={() => {
-                    selectedObjectRef.current = null;
-                    setSelectedLabel(null);
-                  }}
-                >
-                  <XCircle className="w-3.5 h-3.5" />
+            <div className="absolute top-6 right-6 animate-scale-in">
+              <Badge variant="default" className="bg-green-600 hover:bg-green-700 gap-2 pl-3 py-1.5 pr-2 shadow-xl border-none">
+                Locked: {selectedLabel}
+                <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-white/20 p-0" onClick={() => { selectedObjectRef.current = null; setSelectedLabel(null); }}>
+                  <XCircle className="w-4 h-4" />
                 </Button>
               </Badge>
             </div>
           )}
-          <div className="flex justify-center mb-2">
+          
+          <div className="flex justify-center mb-4">
             {isModelLoading ? (
-              <Badge variant="secondary" className="animate-pulse gap-1">
-                <RefreshCw className="w-3 h-3 animate-spin" /> Initializing AI...
+              <Badge variant="secondary" className="animate-pulse gap-2 px-4 py-1">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Preparing AI Engine...
               </Badge>
             ) : (
-              <Badge variant="outline" className="text-primary border-primary/20 gap-1 bg-primary/5">
-                <Cpu className="w-3 h-3" /> Throttled Inference Loop
+              <Badge variant="outline" className="text-primary border-primary/30 gap-2 px-4 py-1 bg-primary/5">
+                <Cpu className="w-3.5 h-3.5" /> Neural Network Active
               </Badge>
             )}
           </div>
-          <CardTitle className="text-4xl font-headline font-bold text-primary flex items-center justify-center gap-3">
-            <Sparkles className="w-8 h-8" />
-            Vision Stream
+          
+          <CardTitle className="text-4xl md:text-5xl font-bold tracking-tight text-primary flex flex-col md:flex-row items-center justify-center gap-4">
+            <div className="p-3 bg-primary/10 rounded-2xl">
+              <Sparkles className="w-10 h-10 text-primary" />
+            </div>
+            AI Smart Auto Focus & Dynamic Tracking
           </CardTitle>
-          <CardDescription className="text-lg">
-            Selective background blur with real-time AI object tracking.
+          <CardDescription className="text-lg max-w-2xl mx-auto mt-4 leading-relaxed">
+            Real-time object segmentation and tracking. Focus on any subject by clicking it in the stream.
+            <div className="mt-2 text-sm font-medium text-muted-foreground bg-muted/30 py-2 rounded-lg px-4 border border-muted/50">
+              How it works: Detect → Match Overlap (IoU) → Selective Gaussian Blur Mask
+            </div>
           </CardDescription>
         </CardHeader>
         
-        <CardContent className="p-0 relative">
+        <CardContent className="p-0 relative group">
           <div className={cn(
-            "relative aspect-video bg-muted flex flex-col items-center justify-center overflow-hidden transition-all duration-500",
-            !isStreaming && "bg-slate-100"
+            "relative aspect-video bg-slate-900 flex flex-col items-center justify-center overflow-hidden transition-all duration-700",
+            !isStreaming && "bg-slate-50"
           )}>
-            {/* Using opacity-0 instead of display:none to keep the video element active for the render loop */}
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none"
-            />
-            
-            <canvas
-              ref={canvasRef}
-              onClick={handleCanvasClick}
-              className={cn(
-                "absolute inset-0 z-10 transition-opacity duration-700 w-full h-full object-cover cursor-crosshair",
-                isStreaming ? "opacity-100" : "opacity-0 pointer-events-none"
-              )}
-            />
+            <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none" />
+            <canvas ref={canvasRef} onClick={handleCanvasClick} className={cn(
+              "absolute inset-0 z-10 transition-opacity duration-1000 w-full h-full object-cover cursor-crosshair",
+              isStreaming ? "opacity-100" : "opacity-0 pointer-events-none"
+            )} />
 
             {!isStreaming && !isLoading && (
-              <div className="z-10 flex flex-col items-center gap-4 text-muted-foreground animate-scale-in">
-                <div className="p-8 rounded-full bg-secondary/50">
-                  <Camera className="w-16 h-16 text-primary" />
+              <div className="z-10 flex flex-col items-center gap-6 animate-scale-in text-center px-6">
+                <div className="p-10 rounded-[2.5rem] bg-white shadow-2xl border border-muted ring-4 ring-primary/5">
+                  <Video className="w-20 h-20 text-primary/40" />
                 </div>
-                <p className="font-medium">Stream is currently offline</p>
+                <div className="space-y-2">
+                  <p className="text-2xl font-bold text-slate-800">Ready to Visualize</p>
+                  <p className="text-muted-foreground">Choose a source below to start the intelligent stream</p>
+                </div>
               </div>
             )}
 
             {isLoading && (
-              <div className="absolute inset-0 bg-white/40 z-20 flex items-center justify-center backdrop-blur-[2px]">
-                <RefreshCw className="w-12 h-12 text-primary animate-spin" />
+              <div className="absolute inset-0 bg-white/60 z-20 flex flex-col items-center justify-center backdrop-blur-md">
+                <RefreshCw className="w-16 h-16 text-primary animate-spin mb-4" />
+                <p className="font-bold text-primary animate-pulse">Initializing Stream...</p>
               </div>
             )}
           </div>
-
-          {hasCameraPermission === false && (
-            <div className="px-6 py-4">
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle>Access Required</AlertTitle>
-                <AlertDescription>
-                  Camera access was denied. Please check your browser's site permissions.
-                </AlertDescription>
-              </Alert>
-            </div>
-          )}
         </CardContent>
 
-        <CardFooter className="flex flex-col gap-6 p-8 bg-secondary/10 border-t border-secondary/20">
-          <div className="flex flex-col sm:flex-row items-center justify-between w-full gap-4">
-            <div className="flex items-center space-x-4 bg-white/50 px-4 py-2 rounded-full border border-primary/10 shadow-sm">
-              <div className="flex items-center gap-2">
-                {isLowLight ? <Moon className="w-4 h-4 text-primary" /> : <Sun className="w-4 h-4 text-muted-foreground" />}
-                <Label htmlFor="low-light" className="text-sm font-semibold whitespace-nowrap">
-                  Low Light Mode
-                </Label>
-              </div>
-              <Switch 
-                id="low-light" 
-                checked={isLowLight} 
-                onCheckedChange={setIsLowLight}
-                disabled={!isStreaming}
-              />
+        <CardFooter className="flex flex-col gap-8 p-10 bg-gradient-to-b from-transparent to-muted/20 border-t border-muted/50">
+          <div className="flex flex-col lg:flex-row items-center justify-between w-full gap-8">
+            <div className="flex flex-col gap-4 w-full lg:w-auto">
+              <Label className="text-xs font-bold uppercase tracking-widest text-muted-foreground ml-1">Stream Source</Label>
+              <Tabs value={sourceMode} onValueChange={(val) => { stopStream(); setSourceMode(val as any); }} className="w-full sm:w-[300px]">
+                <TabsList className="grid w-full grid-cols-2 h-12 bg-white border border-muted shadow-sm">
+                  <TabsTrigger value="camera" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-white">
+                    <Camera className="w-4 h-4" /> Camera
+                  </TabsTrigger>
+                  <TabsTrigger value="file" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-white">
+                    <Upload className="w-4 h-4" /> MP4 File
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
             </div>
 
-            <div className="flex gap-4">
-              {!isStreaming ? (
-                <Button 
-                  size="lg" 
-                  onClick={startCamera} 
-                  disabled={isLoading || isModelLoading}
-                  className="px-10 h-14 rounded-full text-lg font-semibold transition-all hover:scale-105 active:scale-95 shadow-lg shadow-primary/20"
-                >
-                  {isLoading ? (
-                    <><RefreshCw className="mr-2 h-5 w-5 animate-spin" /> Initializing...</>
+            <div className="flex flex-col gap-4 w-full lg:w-auto items-center lg:items-end">
+              <Label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mr-1">Controls</Label>
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center space-x-4 bg-white px-5 py-3 rounded-2xl border border-muted shadow-sm">
+                  <div className="flex items-center gap-3">
+                    {isLowLight ? <Moon className="w-5 h-5 text-indigo-600" /> : <Sun className="w-5 h-5 text-amber-500" />}
+                    <Label htmlFor="low-light" className="text-sm font-bold cursor-pointer">Low Light Mode</Label>
+                  </div>
+                  <Switch id="low-light" checked={isLowLight} onCheckedChange={setIsLowLight} disabled={!isStreaming} />
+                </div>
+
+                {!isStreaming ? (
+                  sourceMode === 'camera' ? (
+                    <Button size="lg" onClick={startCamera} disabled={isLoading || isModelLoading} className="px-12 h-16 rounded-2xl text-xl font-bold transition-all hover:scale-105 shadow-2xl shadow-primary/30">
+                      <Camera className="mr-3 h-6 w-6" /> Start Stream
+                    </Button>
                   ) : (
-                    <><Camera className="mr-2 h-5 w-5" /> Start Live Stream</>
-                  )}
-                </Button>
-              ) : (
-                <Button 
-                  variant="destructive" 
-                  size="lg" 
-                  onClick={stopCamera}
-                  className="px-10 h-14 rounded-full text-lg font-semibold transition-all hover:scale-105 active:scale-95 shadow-lg shadow-destructive/20"
-                >
-                  <CameraOff className="mr-2 h-5 w-5" /> Stop Stream
-                </Button>
-              )}
+                    <Button size="lg" onClick={() => fileInputRef.current?.click()} disabled={isLoading || isModelLoading} className="px-12 h-16 rounded-2xl text-xl font-bold transition-all hover:scale-105 shadow-2xl shadow-primary/30">
+                      <Upload className="mr-3 h-6 w-6" /> Select MP4
+                    </Button>
+                  )
+                ) : (
+                  <Button variant="destructive" size="lg" onClick={stopStream} className="px-12 h-16 rounded-2xl text-xl font-bold transition-all hover:scale-105 shadow-2xl shadow-destructive/30">
+                    <CameraOff className="mr-3 h-6 w-6" /> Stop Stream
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
-          
-          <div className="text-center">
-            <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-              Click any object in the stream to lock focus. {isLowLight && "Low Light Mode is applying contrast enhancement filters."}
-            </p>
-          </div>
+
+          <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="video/mp4" className="hidden" />
+
+          {hasCameraPermission === false && (
+            <Alert variant="destructive" className="border-none bg-red-50 text-red-900 rounded-xl shadow-lg">
+              <AlertCircle className="h-5 w-5" />
+              <AlertTitle className="font-bold">Hardware Access Required</AlertTitle>
+              <AlertDescription>
+                Camera access was blocked. Please enable it in your browser address bar to use this feature.
+              </AlertDescription>
+            </Alert>
+          )}
         </CardFooter>
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in delay-200">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-8 animate-fade-in delay-300">
         {[
-          { title: "Optimized Loop", desc: "Detection runs every 10 frames while rendering stays at a smooth 60 FPS.", icon: <Cpu className="w-6 h-6 text-primary" /> },
-          { title: "Smart Tracking", desc: "IoU-based matching follows your target even between inference cycles.", icon: <Box className="w-6 h-6 text-primary" /> },
-          { title: "Interactive Focus", desc: "Click any detected object to instantly focus the AI's selective attention.", icon: <MousePointer2 className="w-6 h-6 text-primary" /> }
+          { title: "Neural Processing", desc: "Detection uses COCO-SSD with MobileNetV2 for fast edge inference.", icon: <Cpu className="w-8 h-8 text-primary" /> },
+          { title: "Spatial Stability", desc: "Intersection over Union (IoU) maintains object focus between inference cycles.", icon: <Box className="w-8 h-8 text-primary" /> },
+          { title: "Point of Interest", desc: "Click subjects to lock the AI focus engine and apply selective blur.", icon: <MousePointer2 className="w-8 h-8 text-primary" /> }
         ].map((feature, i) => (
-          <Card key={i} className="bg-white/60 border-none shadow-sm hover:shadow-md transition-shadow">
-            <CardHeader className="pb-2">
-              <div className="mb-2">{feature.icon}</div>
-              <CardTitle className="text-lg font-headline">{feature.title}</CardTitle>
+          <Card key={i} className="bg-white/70 border-none shadow-xl hover:shadow-2xl transition-all duration-300 rounded-2xl p-2 hover:-translate-y-1">
+            <CardHeader className="pb-4">
+              <div className="mb-4 p-3 bg-primary/5 w-fit rounded-xl border border-primary/10">{feature.icon}</div>
+              <CardTitle className="text-xl font-bold">{feature.title}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground leading-relaxed">
+              <p className="text-muted-foreground leading-relaxed font-medium">
                 {feature.desc}
               </p>
             </CardContent>
