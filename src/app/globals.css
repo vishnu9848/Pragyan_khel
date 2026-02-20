@@ -4,26 +4,26 @@
 
 @layer base {
   :root {
-    --background: 230 20% 7%; /* Deep Midnight Slate */
-    --foreground: 0 0% 98%;
-    --card: 230 20% 8%;
-    --card-foreground: 0 0% 98%;
-    --popover: 230 20% 8%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 230 85% 65%; /* Vibrant Indigo */
-    --primary-foreground: 210 40% 98%;
-    --secondary: 230 15% 15%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 230 15% 15%;
-    --muted-foreground: 230 10% 60%;
-    --accent: 170 85% 50%; /* Electric Teal */
-    --accent-foreground: 170 100% 5%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 230 15% 15%;
-    --input: 230 15% 15%;
-    --ring: 230 85% 65%;
-    --radius: 1.25rem;
+    --background: 210 40% 98%; /* #f8fafc - Soft light gray */
+    --foreground: 222 47% 11%; /* #111827 - Slate 900 */
+    --card: 0 0% 100%; /* #ffffff */
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 160 84% 39%; /* #10b981 - Emerald 500 */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217 91% 60%; /* #3b82f6 - Blue 500 */
+    --secondary-foreground: 0 0% 100%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215 16% 47%; /* #6b7280 */
+    --accent: 160 84% 39%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 160 84% 39%;
+    --radius: 1rem;
   }
 }
 
@@ -38,22 +38,22 @@
 
 @layer utilities {
   .glass-panel {
-    @apply bg-card/60 backdrop-blur-2xl border border-white/5 shadow-[0_8px_64px_-12px_rgba(0,0,0,0.5)];
+    @apply bg-white/80 backdrop-blur-md border border-slate-200/60 shadow-[0_10px_25px_rgba(0,0,0,0.05)];
   }
-  .neon-glow {
-    @apply shadow-[0_0_20px_rgba(20,255,200,0.4)];
+  .emerald-glow {
+    @apply shadow-[0_0_12px_rgba(16,185,129,0.3)];
   }
 }
 
 @keyframes float {
   0% { transform: translateY(0px); }
-  50% { transform: translateY(-10px); }
+  50% { transform: translateY(-8px); }
   100% { transform: translateY(0px); }
 }
 
 @keyframes scan {
   0% { transform: translateY(-100%); opacity: 0; }
-  50% { opacity: 0.5; }
+  50% { opacity: 0.3; }
   100% { transform: translateY(100%); opacity: 0; }
 }
 
@@ -71,14 +71,14 @@
 }
 
 @keyframes scale-in {
-  from { opacity: 0; transform: scale(0.95); }
+  from { opacity: 0; transform: scale(0.98); }
   to { opacity: 1; transform: scale(1); }
 }
 
 .animate-fade-in {
-  animation: fade-in 0.5s ease-out forwards;
+  animation: fade-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .animate-scale-in {
-  animation: scale-in 0.3s ease-out forwards;
+  animation: scale-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
